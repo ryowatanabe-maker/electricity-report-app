@@ -6,10 +6,11 @@ import sys
 import chardet
 import openpyxl
 from openpyxl.utils import cell
-from openpyxl.utils.dataframe import dataframe_to_rows # DataFrameを直接セルに書き込むために必要
+from openpyxl.utils.dataframe import dataframe_to_rows
 import datetime
 import shutil
 import io
+import numpy as np # pandasが依存するためインポートを明記
 
 # ======================================================
 # 💡 設定: ファイル名
@@ -17,10 +18,11 @@ import io
 EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
 
 
-# --- CSV読み込み関数 (Streamlit環境用) ---
+# --- CSV読み込み関数 (自動エンコーディング検出) ---
 @st.cache_data
 def detect_and_read_csv(uploaded_file):
     """アップロードされたファイルの内容を読み込み、エンコーディングを自動検出してDataFrameを返す"""
+    
     uploaded_file.seek(0)
     raw_data = uploaded_file.read()
     
@@ -33,17 +35,19 @@ def detect_and_read_csv(uploaded_file):
     for encoding in encodings_to_try:
         try:
             df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
+            
             if '年' in df.columns:
                  return df
             else:
                  continue
+
         except Exception:
             continue
             
     raise UnicodeDecodeError(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excelへのデータ書き込みとレポート更新関数 (OpenPyXL専用に統一) ---
+# --- Excel書き込み関数 (openpyxlで統計値を書き込む) ---
 def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_after_full, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
     """
     Openpyxlを使って、全てのデータとレポート情報をExcelファイルに書き込む。
@@ -59,6 +63,7 @@ def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_aft
     try:
         workbook = openpyxl.load_workbook(excel_file_path)
     except FileNotFoundError:
+        st.error(f"エラー: Excelテンプレートが見つかりません。")
         return False
 
     # --- 1. データシートの上書き (Openpyxlを使用) ---
@@ -67,17 +72,20 @@ def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_aft
             workbook.create_sheet(sheet_name)
         ws = workbook[sheet_name]
         
-        # 既存のデータをクリア (ヘッダー行を維持したい場合は、この行と次の行を調整)
-        ws.delete_rows(2, ws.max_row) 
+        # 既存のデータをクリア (ヘッダー行を維持したい場合は、2行目から削除)
+        # NOTE: CSVは2行目からデータが始まるため、1行目(ヘッダー)を残す
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row) 
         
-        # DataFrameを直接セルに書き込む
-        rows = dataframe_to_rows(df_data, header=True, index=False)
-        for r_idx, row in enumerate(rows, 1):
+        # DataFrameを直接セルに書き込む（ヘッダー行は除く）
+        rows = dataframe_to_rows(df_data, header=False, index=False)
+        for row in rows:
              ws.append(row)
 
     # --- 2. Sheet1: 24時間別平均の書き込み ---
     if SHEET1_NAME not in workbook.sheetnames:
         workbook.create_sheet(SHEET1_NAME) 
+        
     ws_sheet1 = workbook[SHEET1_NAME]
     
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count'])
@@ -118,6 +126,7 @@ def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_aft
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
     
     workbook.save(excel_file_path)
+    
     return True
 
 
@@ -201,8 +210,11 @@ def main_streamlit_app():
             
             datetime_cols = ['年', '月', '日', '時', '日付']
             consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
+            
+            # 💡 エラー修正: 列データに対して処理を実行
             for col in consumption_cols:
-                df_combined[col] = pd.to_numeric(col, errors='coerce').fillna(0) # 修正が必要
+                df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
+            
             df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
 
 
