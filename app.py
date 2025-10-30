@@ -6,6 +6,7 @@ import sys
 import chardet
 import openpyxl
 from openpyxl.utils import cell
+from openpyxl.utils.dataframe import dataframe_to_rows # DataFrameを直接セルに書き込むために必要
 import datetime
 import shutil
 import io
@@ -13,15 +14,13 @@ import io
 # ======================================================
 # 💡 設定: ファイル名
 # ======================================================
-# GitHubリポジトリに置くテンプレートExcelファイル名
 EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
 
 
-# --- CSV読み込み関数 (自動エンコーディング検出) ---
+# --- CSV読み込み関数 (Streamlit環境用) ---
 @st.cache_data
 def detect_and_read_csv(uploaded_file):
     """アップロードされたファイルの内容を読み込み、エンコーディングを自動検出してDataFrameを返す"""
-    
     uploaded_file.seek(0)
     raw_data = uploaded_file.read()
     
@@ -34,36 +33,51 @@ def detect_and_read_csv(uploaded_file):
     for encoding in encodings_to_try:
         try:
             df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
-            
             if '年' in df.columns:
                  return df
             else:
                  continue
-
         except Exception:
             continue
             
     raise UnicodeDecodeError(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excel書き込み関数 (openpyxlで統計値を書き込む) ---
-def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
+# --- Excelへのデータ書き込みとレポート更新関数 (OpenPyXL専用に統一) ---
+def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_after_full, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
     """
-    Excelファイルにデータ、平均値、期間情報を書き込む。
+    Openpyxlを使って、全てのデータとレポート情報をExcelファイルに書き込む。
     """
+    SHEET_NAMES = {
+        '元データ': df_combined,
+        '施工前': df_before_full,
+        '施工後（調光後）': df_after_full,
+    }
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
     try:
         workbook = openpyxl.load_workbook(excel_file_path)
     except FileNotFoundError:
-        st.error(f"エラー: Excelテンプレートが見つかりません。")
-        return
+        return False
 
-    # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) ---
+    # --- 1. データシートの上書き (Openpyxlを使用) ---
+    for sheet_name, df_data in SHEET_NAMES.items():
+        if sheet_name not in workbook.sheetnames:
+            workbook.create_sheet(sheet_name)
+        ws = workbook[sheet_name]
+        
+        # 既存のデータをクリア (ヘッダー行を維持したい場合は、この行と次の行を調整)
+        ws.delete_rows(2, ws.max_row) 
+        
+        # DataFrameを直接セルに書き込む
+        rows = dataframe_to_rows(df_data, header=True, index=False)
+        for r_idx, row in enumerate(rows, 1):
+             ws.append(row)
+
+    # --- 2. Sheet1: 24時間別平均の書き込み ---
     if SHEET1_NAME not in workbook.sheetnames:
         workbook.create_sheet(SHEET1_NAME) 
-        
     ws_sheet1 = workbook[SHEET1_NAME]
     
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count'])
@@ -72,7 +86,6 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     current_row = 36
     for hour in range(1, 25): 
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00")
-
         ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'] if hour in metrics_before.index else 0) 
         ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'] if hour in metrics_after.index else 0)
         current_row += 1
@@ -81,14 +94,14 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_sheet1['D35'] = '施工後 平均kWh/h'
     ws_sheet1['A35'] = '時間帯'
 
-    # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
+    # --- 3. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
     if SUMMARY_SHEET_NAME not in workbook.sheetnames:
         workbook.create_sheet(SUMMARY_SHEET_NAME)
         
     ws_summary = workbook[SUMMARY_SHEET_NAME]
 
     days_before = (end_before - start_before).days + 1
-    days_after = (end_after - start_before).days + 1 # datetime.dateオブジェクトの引き算
+    days_after = (end_after - start_after).days + 1
     format_date = lambda d: f"{d.year}/{d.month}/{d.day}"
 
     start_b_str = format_date(start_before)
@@ -105,7 +118,6 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
     
     workbook.save(excel_file_path)
-    
     return True
 
 
@@ -190,7 +202,7 @@ def main_streamlit_app():
             datetime_cols = ['年', '月', '日', '時', '日付']
             consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
             for col in consumption_cols:
-                df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
+                df_combined[col] = pd.to_numeric(col, errors='coerce').fillna(0) # 修正が必要
             df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
 
 
@@ -207,23 +219,8 @@ def main_streamlit_app():
             
             # --- d) Excel書き込み ---
             
-            # 1. Pandasでデータシートを上書き (既存シートの保持)
-            existing_workbook = openpyxl.load_workbook(temp_excel_path)
-            
-            with pd.ExcelWriter(temp_excel_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                # 既存のワークブックをwriterにセット
-                writer.book = existing_workbook
-                
-                # 既存のシート群をwriterに登録（これによりSheet1, まとめが保持される）
-                writer.sheets = dict((ws.title, ws) for ws in existing_workbook.worksheets)
-
-                # データシートの上書き
-                df_combined.to_excel(writer, sheet_name='元データ', index=False) 
-                df_before_full.to_excel(writer, sheet_name='施工前', index=False, if_sheet_exists='replace')   
-                df_after_full.to_excel(writer, sheet_name='施工後（調光後）', index=False, if_sheet_exists='replace')
-
-            # 2. OpenPyXLでSheet1とまとめシートを更新
-            write_excel_reports(temp_excel_path, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
+            # Openpyxlのみで全データを書き込み
+            write_all_data_to_excel(temp_excel_path, df_combined, df_before_full, df_after_full, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
             
             
             # --- e) ファイル名の変更とダウンロードの準備 ---
