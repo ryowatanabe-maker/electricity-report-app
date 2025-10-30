@@ -247,3 +247,30 @@ def main_streamlit_app():
                 df_after_full.to_excel(writer, sheet_name='施工後（調光後）', index=False)
 
             # 2. OpenPyXLで統計値シート（Sheet1, まとめ）を更新
+            write_excel_reports(temp_excel_path, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
+            
+            
+            # --- e) ファイル名の変更とダウンロードの準備 ---
+            today_date_str = datetime.date.today().strftime('%Y%m%d')
+            new_file_name = f"{store_name}：電力報告書{today_date_str}.xlsx"
+            
+            final_path = os.path.join(temp_dir, new_file_name)
+            os.rename(temp_excel_path, final_path)
+            
+            # ダウンロードボタンの表示
+            with open(final_path, "rb") as file:
+                st.success("✅ 処理が完了しました！以下のボタンから報告書をダウンロードしてください。")
+                st.download_button(
+                    label="⬇️ 報告書ファイルをダウンロード",
+                    data=file,
+                    file_name=new_file_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            
+        except Exception as e:
+            st.error("🚨 実行中にエラーが発生しました。ファイル形式と入力値を確認してください。")
+            st.warning("特に、CSVのヘッダー行が「年,月,日,時,kWh,...」の形式で2行目から始まっているか確認してください。")
+            st.exception(e)
+
+if __name__ == "__main__":
+    main_streamlit_app()
