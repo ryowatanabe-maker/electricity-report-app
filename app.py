@@ -15,8 +15,7 @@ import numpy as np
 # ======================================================
 # 💡 設定: ファイル名
 # ======================================================
-# テンプレートExcelファイル名（GitHubリポジトリに置くファイル名）
-EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx' 
+EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
 
 
 # --- CSV読み込み関数 (自動エンコーディング検出) ---
@@ -35,7 +34,6 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # header=1 で2行目（年,月,日,時,...）をヘッダーとして読み込む
             df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
             
             if '年' in df.columns:
@@ -49,11 +47,10 @@ def detect_and_read_csv(uploaded_file):
     raise UnicodeDecodeError(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excel書き込み関数 (Openpyxlで統計値を書き込む) ---
+# --- Excelレポート書き込み関数 ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    """
-    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
-    """
+    # ... (Sheet1, まとめシートの書き込みロジックは前回から変更なし) ...
+    
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -63,49 +60,40 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         st.error(f"エラー: Excelテンプレートが見つかりません。")
         return False
 
-    # --- 共通計算 ---
-    days_before = (end_before - start_before).days + 1
-    days_after = (end_after - start_after).days + 1
-    
-    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
-    # df_data['日付'].nunique() で計測日数を厳密に把握することも可能だが、ここでは入力日数を使用
-    avg_daily_total_before = df_before['合計kWh'].sum() / days_before
-    avg_daily_total_after = df_after['合計kWh'].sum() / days_after
-    
     # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) と合計値 (C33, D33) ---
     if SHEET1_NAME not in workbook.sheetnames:
         workbook.create_sheet(SHEET1_NAME) 
         
     ws_sheet1 = workbook[SHEET1_NAME]
     
-    # 💡 修正: 日別平均合計値をC33, D33に書き込む
+    # 測定期間中の日別平均合計kWhを計算
+    days_before = (end_before - start_before).days + 1
+    days_after = (end_after - start_after).days + 1
+    
+    avg_daily_total_before = df_before['合計kWh'].sum() / days_before
+    avg_daily_total_after = df_after['合計kWh'].sum() / days_after
+    
+    # C33, D33に日別平均合計値を書き込む
     ws_sheet1['C33'] = avg_daily_total_before
     ws_sheet1['D33'] = avg_daily_total_after
     
-    # 24時間別平均の計算
+    # 24時間別平均の計算と書き込み
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count'])
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count'])
 
     current_row = 36
     for hour in range(1, 25): 
-        # A列: 時間ラベル (e.g., "01:00")
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
-        # B列: 時間帯ラベル (e.g., "00:00～01:00")
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
-        
         start_h = f"{start_h_val:02d}:00"
         end_h = f"{end_h_val:02d}:00"
-        
-        # 00:00から01:00
         time_range = f"{start_h}～{end_h}"
 
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
-        # C列 (施工前 平均)
         ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'] if hour in metrics_before.index else 0) 
-        # D列 (施工後 平均)
         ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'] if hour in metrics_after.index else 0)
         current_row += 1
     
@@ -134,7 +122,7 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary['H8'] = operating_hours
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
     
-    # 💡 まとめシートの合計値も書き込み (B7, B8を推定)
+    # まとめシートの合計値も書き込み (B7, B8を推定)
     ws_summary['B7'] = avg_daily_total_before
     ws_summary['B8'] = avg_daily_total_after
     
@@ -143,7 +131,7 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     return True
 
 
-# --- Streamlitメインアプリケーション ---
+# --- メイン処理関数 ---
 def main_streamlit_app():
     st.set_page_config(layout="wide", page_title="電力データ報告書作成アプリ")
     st.title("💡 電力データ自動処理アプリ")
@@ -220,7 +208,7 @@ def main_streamlit_app():
             df_combined.dropna(subset=['年', '月', '日'], inplace=True)
             
             df_combined['日付'] = pd.to_datetime(
-                df_combined['年'].astype(str) + '-' + df_combined['月'].astype(str) + '-' + df_combined['日'].astype(str), 
+                df_combined['年'].astype(str) + '-' + df_combined['月'].astype(str) + '-' + df_combined['日'].astype('str'), 
                 format='%Y-%m-%d', errors='coerce'
             ).dt.date
             df_combined.dropna(subset=['日付'], inplace=True)
@@ -252,7 +240,7 @@ def main_streamlit_app():
             
             # --- d) Excel書き込み ---
             
-            # 1. Openpyxlのみで全データを書き込み (エラー解消済)
+            # 1. Openpyxlのみでデータシートの書き込み
             def append_df_to_sheet(workbook, sheet_name, df_data):
                 if sheet_name not in workbook.sheetnames:
                     workbook.create_sheet(sheet_name)
