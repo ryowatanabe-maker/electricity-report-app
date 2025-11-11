@@ -15,6 +15,7 @@ import numpy as np
 # ======================================================
 # 💡 設定: ファイル名
 # ======================================================
+# GitHubリポジトリに置くテンプレートExcelファイル名
 EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
 
 
@@ -47,10 +48,11 @@ def detect_and_read_csv(uploaded_file):
     raise UnicodeDecodeError(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excelレポート書き込み関数 ---
+# --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    # ... (Sheet1, まとめシートの書き込みロジックは前回から変更なし) ...
-    
+    """
+    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
+    """
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -60,20 +62,22 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         st.error(f"エラー: Excelテンプレートが見つかりません。")
         return False
 
+    # --- 共通計算 ---
+    days_before = (end_before - start_before).days + 1
+    days_after = (end_after - start_after).days + 1
+    
+    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
+    avg_daily_total_before = df_before['合計kWh'].sum() / days_before
+    avg_daily_total_after = df_after['合計kWh'].sum() / days_after
+    
+    
     # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) と合計値 (C33, D33) ---
     if SHEET1_NAME not in workbook.sheetnames:
         workbook.create_sheet(SHEET1_NAME) 
         
     ws_sheet1 = workbook[SHEET1_NAME]
     
-    # 測定期間中の日別平均合計kWhを計算
-    days_before = (end_before - start_before).days + 1
-    days_after = (end_after - start_after).days + 1
-    
-    avg_daily_total_before = df_before['合計kWh'].sum() / days_before
-    avg_daily_total_after = df_after['合計kWh'].sum() / days_after
-    
-    # C33, D33に日別平均合計値を書き込む
+    # 💡 C33, D33に日別平均合計値を書き込む
     ws_sheet1['C33'] = avg_daily_total_before
     ws_sheet1['D33'] = avg_daily_total_after
     
@@ -83,8 +87,10 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
 
     current_row = 36
     for hour in range(1, 25): 
+        # A列: 時間ラベル (e.g., "01:00")
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
+        # B列: 時間帯ラベル (e.g., "00:00～01:00")
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
         start_h = f"{start_h_val:02d}:00"
@@ -93,7 +99,9 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
 
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
+        # C列 (施工前 平均)
         ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'] if hour in metrics_before.index else 0) 
+        # D列 (施工後 平均)
         ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'] if hour in metrics_after.index else 0)
         current_row += 1
     
@@ -131,7 +139,7 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     return True
 
 
-# --- メイン処理関数 ---
+# --- Streamlitメインアプリケーション ---
 def main_streamlit_app():
     st.set_page_config(layout="wide", page_title="電力データ報告書作成アプリ")
     st.title("💡 電力データ自動処理アプリ")
@@ -202,7 +210,7 @@ def main_streamlit_app():
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
             
-            # --- データの重複削除 ---
+            # --- データの重複削除 (エラー解消済) ---
             df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
             
             df_combined.dropna(subset=['年', '月', '日'], inplace=True)
