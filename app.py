@@ -15,7 +15,8 @@ import numpy as np
 # ======================================================
 # 💡 設定: ファイル名
 # ======================================================
-EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
+# テンプレートファイル名（環境に合わせて変更してください）
+EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx' 
 
 
 # --- CSV読み込み関数 (自動エンコーディング検出) ---
@@ -34,8 +35,10 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
+            # header=1 で2行目（年,月,日,時,...）をヘッダーとして読み込む
             df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
             
+            # '年'列が存在するか確認（データが正しく読み込まれたと仮定）
             if '年' in df.columns:
                  return df
             else:
@@ -61,23 +64,62 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         st.error(f"エラー: Excelテンプレートが見つかりません。")
         return False
 
-    # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) ---
+    # --- 共通計算 ---
+    days_before = (end_before - start_before).days + 1
+    days_after = (end_after - start_after).days + 1
+    
+    # 測定期間中の日別平均合計kWhを計算
+    # (合計kWhを総日数で割ることで「1日あたりの平均総消費電力」を算出)
+    avg_daily_total_before = df_before['合計kWh'].sum() / days_before
+    avg_daily_total_after = df_after['合計kWh'].sum() / days_after
+    
+    # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) と合計値 (C33, D33) ---
     if SHEET1_NAME not in workbook.sheetnames:
         workbook.create_sheet(SHEET1_NAME) 
         
     ws_sheet1 = workbook[SHEET1_NAME]
     
+    # 💡 修正点1: 日別平均合計値をC33, D33に書き込む（テンプレートの「合計」行に対応）
+    # 通常、このセルに平均値が配置されるため、静的な値を書き込みます。
+    ws_sheet1['C33'] = avg_daily_total_before
+    ws_sheet1['D33'] = avg_daily_total_after
+    
+    # 24時間別平均の計算
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count'])
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count'])
 
     current_row = 36
     for hour in range(1, 25): 
-        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00")
+        # A列: 時間ラベル (e.g., "01:00")
+        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
+        
+        # 💡 修正点2: B列に時間帯ラベルを書き込む（テンプレートのB列に対応）
+        # '時'の1は00:00～01:00、24は23:00～00:00に対応
+        start_h_val = (hour - 1) % 24
+        end_h_val = hour % 24
+        
+        # 24時（00:00）を正しく表示するため、24時は00に変換される
+        start_h = f"{start_h_val:02d}:00"
+        end_h = f"{end_h_val:02d}:00"
+        
+        time_range = f"{start_h}～{end_h}"
+        if hour == 24: # 24時（00:00）の場合は、23:00～00:00にする
+             time_range = "23:00～00:00" 
+        elif hour == 1: # 1時（01:00）の場合は、00:00～01:00
+             time_range = "00:00～01:00"
+        else: # それ以外の場合は hour-1 から hour へ
+             time_range = f"{start_h}～{end_h}"
 
+
+        ws_sheet1.cell(row=current_row, column=2, value=time_range) 
+        
+        # C列 (施工前 平均)
         ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'] if hour in metrics_before.index else 0) 
+        # D列 (施工後 平均)
         ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'] if hour in metrics_after.index else 0)
         current_row += 1
     
+    # ヘッダーを再確認 (テンプレートによって行がズレる可能性も考慮し、再設定)
     ws_sheet1['C35'] = '施工前 平均kWh/h'
     ws_sheet1['D35'] = '施工後 平均kWh/h'
     ws_sheet1['A35'] = '時間帯'
@@ -88,8 +130,6 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         
     ws_summary = workbook[SUMMARY_SHEET_NAME]
 
-    days_before = (end_before - start_before).days + 1
-    days_after = (end_after - start_after).days + 1
     format_date = lambda d: f"{d.year}/{d.month}/{d.day}"
 
     start_b_str = format_date(start_before)
@@ -104,6 +144,11 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary['H7'] = after_str
     ws_summary['H8'] = operating_hours
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
+    
+    # 💡 まとめシートの合計値も書き込み（B7, B8を推定）
+    # これらのセルはテンプレートによって異なる場合があるため、動作しない場合はテンプレートに合わせて調整が必要です。
+    ws_summary['B7'] = avg_daily_total_before
+    ws_summary['B8'] = avg_daily_total_after
     
     workbook.save(excel_file_path)
     
@@ -138,13 +183,14 @@ def main_streamlit_app():
     
     with col_date1:
         st.subheader("🗓️ 施工前 測定期間")
+        # デフォルト値を少し過去に変更
         start_before = st.date_input("開始日", today - datetime.timedelta(days=30), key="start_b")
-        end_before = st.date_input("終了日", today - datetime.timedelta(days=25), key="end_b")
+        end_before = st.date_input("終了日", today - datetime.timedelta(days=23), key="end_b")
         
     with col_date2:
         st.subheader("📅 施工後 測定期間")
-        start_after = st.date_input("開始日", today - datetime.timedelta(days=10), key="start_a")
-        end_after = st.date_input("終了日", today - datetime.timedelta(days=5), key="end_a")
+        start_after = st.date_input("開始日", today - datetime.timedelta(days=14), key="start_a")
+        end_after = st.date_input("終了日", today - datetime.timedelta(days=7), key="end_a")
 
     col_info1, col_info2 = st.columns(2)
     with col_info1:
@@ -181,9 +227,8 @@ def main_streamlit_app():
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
             
-            # --- データの重複削除 (新規追加) ---
+            # --- データの重複削除 ---
             df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
-            # ------------------------------------
             
             df_combined.dropna(subset=['年', '月', '日'], inplace=True)
             
@@ -200,7 +245,7 @@ def main_streamlit_app():
                 st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
                 sys.exit()
 
-            # 💡 消費電力カラムの数値変換と合算ロジック (エラー解消済)
+            # 💡 消費電力カラムの数値変換と合算ロジック
             for col in consumption_cols:
                 # 列データに対して数値変換と欠損値処理を実行
                 df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
@@ -221,7 +266,7 @@ def main_streamlit_app():
             
             # --- d) Excel書き込み ---
             
-            # 1. Openpyxlのみで全データを書き込み (エラー解消済)
+            # 1. 元データシートの書き込み
             existing_workbook = openpyxl.load_workbook(temp_excel_path)
             
             # OpenpyxlのDataFrame_to_rowsを使って書き込み
