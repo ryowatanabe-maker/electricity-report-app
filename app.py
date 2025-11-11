@@ -50,7 +50,7 @@ def detect_and_read_csv(uploaded_file):
 # --- Excel書き込み関数 (Openpyxlで統計値を書き込む) ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
     """
-    Openpyxlを使って、全てのデータとレポート情報をExcelファイルに書き込む。
+    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
     """
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
@@ -181,9 +181,9 @@ def main_streamlit_app():
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
             
-            # --- データの重複削除 (同一日時レコードの削除) ---
+            # --- データの重複削除 (新規追加) ---
             df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
-            # --------------------------------------------------
+            # ------------------------------------
             
             df_combined.dropna(subset=['年', '月', '日'], inplace=True)
             
@@ -200,9 +200,11 @@ def main_streamlit_app():
                 st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
                 sys.exit()
 
-            # 💡 全消費電力カラムの合算ロジック
+            # 💡 消費電力カラムの数値変換と合算ロジック (エラー解消済)
             for col in consumption_cols:
+                # 列データに対して数値変換と欠損値処理を実行
                 df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
+            
             df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
 
 
@@ -219,8 +221,30 @@ def main_streamlit_app():
             
             # --- d) Excel書き込み ---
             
-            # 1. Openpyxlのみで全データを書き込み
-            write_all_data_to_excel(temp_excel_path, df_combined, df_before_full, df_after_full, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
+            # 1. Openpyxlのみで全データを書き込み (エラー解消済)
+            existing_workbook = openpyxl.load_workbook(temp_excel_path)
+            
+            # OpenpyxlのDataFrame_to_rowsを使って書き込み
+            def append_df_to_sheet(workbook, sheet_name, df_data):
+                if sheet_name not in workbook.sheetnames:
+                    workbook.create_sheet(sheet_name)
+                ws = workbook[sheet_name]
+                
+                # 既存のデータをクリア (ヘッダー行を残すため2行目以降を削除)
+                if ws.max_row > 1:
+                    ws.delete_rows(2, ws.max_row) 
+
+                # データ書き込み (ヘッダーを無視してデータのみ追記)
+                rows = dataframe_to_rows(df_data, header=False, index=False)
+                for r_idx, row in enumerate(rows, 1):
+                     ws.append(row)
+                
+            append_df_to_sheet(existing_workbook, '元データ', df_combined)
+            append_df_to_sheet(existing_workbook, '施工前', df_before_full)
+            append_df_to_sheet(existing_workbook, '施工後（調光後）', df_after_full)
+            
+            # 2. OpenPyXLでSheet1とまとめシートを更新
+            write_excel_reports(temp_excel_path, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
             
             
             # --- e) ファイル名の変更とダウンロードの準備 ---
