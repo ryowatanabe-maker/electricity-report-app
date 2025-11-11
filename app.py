@@ -18,7 +18,7 @@ import numpy as np
 EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
 
 
-# --- CSV読み込み関数 (省略) ---
+# --- CSV読み込み関数 (自動エンコーディング検出) ---
 @st.cache_data
 def detect_and_read_csv(uploaded_file):
     """アップロードされたファイルの内容を読み込み、エンコーディングを自動検出してDataFrameを返す"""
@@ -34,7 +34,8 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
+            # 💡 修正: header=0 (1行目) をヘッダーとして読み込むように変更
+            df = pd.read_csv(io.BytesIO(raw_data), header=0, encoding=encoding)
             
             if '年' in df.columns:
                  return df
@@ -49,7 +50,9 @@ def detect_and_read_csv(uploaded_file):
 
 # --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    # ... (前略) ...
+    """
+    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
+    """
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -84,8 +87,10 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
 
     current_row = 36
     for hour in range(1, 25): 
+        # A列: 時間ラベル (e.g., "01:00")
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
+        # B列: 時間帯ラベル (e.g., "00:00～01:00")
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
         start_h = f"{start_h_val:02d}:00"
@@ -94,11 +99,13 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
 
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
+        # C列 (施工前 平均)
         if metrics_before is not None and hour in metrics_before.index:
              ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
         else:
              ws_sheet1.cell(row=current_row, column=3, value=0)
              
+        # D列 (施工後 平均)
         if metrics_after is not None and hour in metrics_after.index:
              ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
         else:
@@ -209,30 +216,4 @@ def main_streamlit_app():
             # データ前処理（日付の結合と合計kWhの計算）
             df_combined['年'] = pd.to_numeric(df_combined['年'], errors='coerce').astype('Int64')
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
-            df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
-            
-            # --- データの重複削除 (同一日時レコードの削除) ---
-            df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
-            
-            df_combined.dropna(subset=['年', '月', '日'], inplace=True)
-            
-            # 💡 修正後の正しい日付変換ロジック
-            df_combined['日付'] = pd.to_datetime(
-                df_combined['年'].astype(str) + '-' + df_combined['月'].astype(str) + '-' + df_combined['日'].astype('str'), 
-                format='%Y-%m-%d', errors='coerce'
-            ).dt.date
-            
-            df_combined.dropna(subset=['日付'], inplace=True)
-            
-            datetime_cols = ['年', '月', '日', '時', '日付']
-            consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
-            
-            if not consumption_cols:
-                st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
-                sys.exit()
-
-            # 消費電力カラムの数値変換と合算ロジック
-            for col in consumption_cols:
-                df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
-            
-            df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis
+            df_combined['日'] = pd.
