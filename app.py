@@ -183,6 +183,4 @@ def main_streamlit_app():
         start_after = st.date_input("開始日", today - datetime.timedelta(days=14), key="start_a")
         end_after = st.date_input("終了日", today - datetime.timedelta(days=7), key="end_a")
 
-    col_info1, col_info2 = st.columns(2)
-    with col_info1:
-        operating_hours = st.text_input("営業時間", value="08:00-
+    col_info1, col_info2 = st
