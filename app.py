@@ -34,8 +34,8 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # 💡 修正: header=1 (2行目) をヘッダーとして読み込む設定に戻す
-            df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
+            # 💡 header=0 (1行目) をヘッダーとして読み込む
+            df = pd.read_csv(io.BytesIO(raw_data), header=0, encoding=encoding)
             
             if '年' in df.columns:
                  return df
@@ -45,13 +45,14 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
-    # 汎用的なエラーを発生させる (Streamlitのキャッシュエラー回避)
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excelレポート書き込み関数 (変更なし) ---
+# --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    # ... (この関数は変更なし) ...
+    """
+    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
+    """
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -184,91 +185,4 @@ def main_streamlit_app():
 
     col_info1, col_info2 = st.columns(2)
     with col_info1:
-        operating_hours = st.text_input("営業時間", value="08:00-22:00", help="まとめシートH8に反映")
-    with col_info2:
-        store_name = st.text_input("店舗名", value="大倉山店", help="報告書名とまとめシートB1に反映")
-        
-    st.markdown("---")
-    
-    # --- 3. 実行ボタン ---
-    if st.button("🚀 データ処理を実行し、報告書をダウンロード"):
-        try:
-            # テンポラリフォルダのセットアップ
-            temp_dir = "temp_data"
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # --- a) テンプレートExcelファイルをGitHubからコピー ---
-            if not os.path.exists(EXCEL_TEMPLATE_FILENAME):
-                 st.error(f"🚨 致命的なエラー: GitHubリポジトリにテンプレートファイル '{EXCEL_TEMPLATE_FILENAME}' が見つかりません。ファイル名を確認し、app.pyと同じ場所に配置してください。")
-                 return
-
-            temp_excel_path = os.path.join(temp_dir, EXCEL_TEMPLATE_FILENAME)
-            shutil.copy(EXCEL_TEMPLATE_FILENAME, temp_excel_path)
-                
-            # --- b) データ統合と前処理 ---
-            all_data = []
-            for csv_file in uploaded_csvs:
-                df = detect_and_read_csv(csv_file)
-                all_data.append(df)
-            df_combined = pd.concat(all_data, ignore_index=True)
-            
-            # データ前処理（日付の結合と合計kWhの計算）
-            df_combined['年'] = pd.to_numeric(df_combined['年'], errors='coerce').astype('Int64')
-            df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
-            df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
-            
-            # --- データの重複削除 (同一日時レコードの削除) ---
-            df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
-            
-            df_combined.dropna(subset=['年', '月', '日'], inplace=True)
-            
-            df_combined['日付'] = pd.to_datetime(
-                df_combined['年'].astype(str) + '-' + df_combined['月'].astype(str) + '-' + df_combined['日'].astype('str'), 
-                format='%Y-%m-%d', errors='coerce'
-            ).dt.date
-            df_combined.dropna(subset=['日付'], inplace=True)
-            
-            datetime_cols = ['年', '月', '日', '時', '日付']
-            consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
-            
-            if not consumption_cols:
-                st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
-                sys.exit()
-
-            # 消費電力カラムの数値変換と合算ロジック
-            for col in consumption_cols:
-                df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
-            
-            df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
-
-
-            # --- c) データ分割 ---
-            start_b = start_before
-            end_b = end_before
-            start_a = start_after
-            end_a = end_after
-
-            df_before_full = df_combined[(df_combined['日付'] >= start_b) & (df_combined['日付'] <= end_b)].copy()
-            df_after_full = df_combined[(df_combined['日付'] >= start_a) & (df_combined['日付'] <= end_a)].copy()
-            
-            df_before = df_before_full.copy()
-            df_after = df_after_full.copy()
-            
-            # --- d) Excel書き込み ---
-            
-            # 1. Openpyxlのみでデータシートの書き込み (データシートへの書き込みは削除されました)
-            def append_df_to_sheet(workbook, sheet_name, df_data):
-                if sheet_name not in workbook.sheetnames:
-                    workbook.create_sheet(sheet_name)
-                ws = workbook[sheet_name]
-                
-                # 既存のデータをクリア (ヘッダー行を残すため2行目以降を削除)
-                if ws.max_row > 1:
-                    ws.delete_rows(2, ws.max_row) 
-
-                # データ書き込み (ヘッダーを無視してデータのみ追記)
-                rows = dataframe_to_rows(df_data, header=False, index=False)
-                for r_idx, row in enumerate(rows, 1):
-                     ws.append(row)
-                
-            existing
+        operating_hours = st.text_input("営業時間", value="08:00-
