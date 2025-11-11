@@ -34,7 +34,7 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # 💡 header=0 (1行目) をヘッダーとして読み込む
+            # header=0 (1行目) をヘッダーとして読み込む
             df = pd.read_csv(io.BytesIO(raw_data), header=0, encoding=encoding)
             
             if '年' in df.columns:
@@ -45,6 +45,7 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
+    # 汎用的なエラーを発生させる (Streamlitのキャッシュエラー回避)
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
@@ -154,33 +155,4 @@ def main_streamlit_app():
     st.markdown("### Step 1: ファイルのアップロード")
     
     # --- 1. CSVファイルのアップロード ---
-    uploaded_csvs = st.file_uploader(
-        "📈 CSVデータ (複数可) をアップロードしてください",
-        type=['csv'],
-        accept_multiple_files=True
-    )
-    
-    if uploaded_csvs:
-        st.success(f"CSVファイル {len(uploaded_csvs)}個 が準備できました。")
-        st.markdown("---")
-        st.markdown("### Step 2: 期間と情報の入力")
-    else:
-        st.warning("処理を開始するには、CSVデータをアップロードしてください。")
-        return
-
-    # --- 2. ユーザー入力ウィジェット ---
-    today = datetime.date.today()
-    
-    col_date1, col_date2 = st.columns(2)
-    
-    with col_date1:
-        st.subheader("🗓️ 施工前 測定期間")
-        start_before = st.date_input("開始日", today - datetime.timedelta(days=30), key="start_b")
-        end_before = st.date_input("終了日", today - datetime.timedelta(days=23), key="end_b")
-        
-    with col_date2:
-        st.subheader("📅 施工後 測定期間")
-        start_after = st.date_input("開始日", today - datetime.timedelta(days=14), key="start_a")
-        end_after = st.date_input("終了日", today - datetime.timedelta(days=7), key="end_a")
-
-    col_info1, col_info2 = st
+    uploaded_csvs = st.file_uploader
