@@ -34,7 +34,6 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # 💡 修正: header=0 (1行目) をヘッダーとして読み込む
             df = pd.read_csv(io.BytesIO(raw_data), header=0, encoding=encoding)
             
             if '年' in df.columns:
@@ -45,14 +44,13 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
-    raise UnicodeDecodeError(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
+    # 🚨 修正: UnicodeDecodeErrorではなく、汎用的なExceptionを使用
+    raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
 # --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    """
-    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
-    """
+    # ... (この関数は変更なし。前略) ...
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -66,7 +64,6 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     days_before = (end_before - start_before).days + 1
     days_after = (end_after - start_after).days + 1
     
-    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
     avg_daily_total_before = df_before['合計kWh'].sum() / days_before if not df_before.empty else 0
     avg_daily_total_after = df_after['合計kWh'].sum() / days_after if not df_after.empty else 0
     
@@ -77,20 +74,16 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         
     ws_sheet1 = workbook[SHEET1_NAME]
     
-    # C33, D33に日別平均合計値を書き込む
     ws_sheet1['C33'] = avg_daily_total_before
     ws_sheet1['D33'] = avg_daily_total_after
     
-    # 24時間別平均の計算と書き込み
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_after.empty else None
 
     current_row = 36
     for hour in range(1, 25): 
-        # A列: 時間ラベル (e.g., "01:00")
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
-        # B列: 時間帯ラベル (e.g., "00:00～01:00")
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
         start_h = f"{start_h_val:02d}:00"
@@ -99,13 +92,11 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
 
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
-        # C列 (施工前 平均)
         if metrics_before is not None and hour in metrics_before.index:
              ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
         else:
              ws_sheet1.cell(row=current_row, column=3, value=0)
              
-        # D列 (施工後 平均)
         if metrics_after is not None and hour in metrics_after.index:
              ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
         else:
@@ -138,7 +129,6 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary['H8'] = operating_hours
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
     
-    # まとめシートの合計値も書き込み (B7, B8を推定)
     ws_summary['B7'] = avg_daily_total_before
     ws_summary['B8'] = avg_daily_total_after
     
@@ -153,7 +143,6 @@ def main_streamlit_app():
     st.title("💡 電力データ自動処理アプリ")
     st.markdown("### Step 1: ファイルのアップロード")
     
-    # --- 1. CSVファイルのアップロード ---
     uploaded_csvs = st.file_uploader(
         "📈 CSVデータ (複数可) をアップロードしてください",
         type=['csv'],
@@ -214,7 +203,6 @@ def main_streamlit_app():
             df_combined = pd.concat(all_data, ignore_index=True)
             
             # データ前処理（日付の結合と合計kWhの計算）
-            # 💡 修正: 正しい pd.to_numeric を使用
             df_combined['年'] = pd.to_numeric(df_combined['年'], errors='coerce').astype('Int64')
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
@@ -275,10 +263,7 @@ def main_streamlit_app():
                 
             existing_workbook = openpyxl.load_workbook(temp_excel_path)
             
-            # データシートへの書き込みは削除されました
-            # append_df_to_sheet(existing_workbook, '元データ', df_combined)
-            # append_df_to_sheet(existing_workbook, '施工前', df_before_full)
-            # append_df_to_sheet(existing_workbook, '施工後（調光後）', df_after_full)
+            # データシートへの書き込みはここでは削除
             
             # 2. OpenPyXLでSheet1とまとめシートを更新
             write_excel_reports(temp_excel_path, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
