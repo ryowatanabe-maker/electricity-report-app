@@ -10,7 +10,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 import datetime
 import shutil
 import io
-import numpy as np # pandasが依存するためインポートを明記
+import numpy as np
 
 # ======================================================
 # 💡 設定: ファイル名
@@ -47,16 +47,11 @@ def detect_and_read_csv(uploaded_file):
     raise UnicodeDecodeError(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excel書き込み関数 (openpyxlで統計値を書き込む) ---
-def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_after_full, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
+# --- Excel書き込み関数 (Openpyxlで統計値を書き込む) ---
+def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
     """
     Openpyxlを使って、全てのデータとレポート情報をExcelファイルに書き込む。
     """
-    SHEET_NAMES = {
-        '元データ': df_combined,
-        '施工前': df_before_full,
-        '施工後（調光後）': df_after_full,
-    }
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -66,23 +61,7 @@ def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_aft
         st.error(f"エラー: Excelテンプレートが見つかりません。")
         return False
 
-    # --- 1. データシートの上書き (Openpyxlを使用) ---
-    for sheet_name, df_data in SHEET_NAMES.items():
-        if sheet_name not in workbook.sheetnames:
-            workbook.create_sheet(sheet_name)
-        ws = workbook[sheet_name]
-        
-        # 既存のデータをクリア (ヘッダー行を維持したい場合は、2行目から削除)
-        # NOTE: CSVは2行目からデータが始まるため、1行目(ヘッダー)を残す
-        if ws.max_row > 1:
-            ws.delete_rows(2, ws.max_row) 
-        
-        # DataFrameを直接セルに書き込む（ヘッダー行は除く）
-        rows = dataframe_to_rows(df_data, header=False, index=False)
-        for row in rows:
-             ws.append(row)
-
-    # --- 2. Sheet1: 24時間別平均の書き込み ---
+    # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) ---
     if SHEET1_NAME not in workbook.sheetnames:
         workbook.create_sheet(SHEET1_NAME) 
         
@@ -94,6 +73,7 @@ def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_aft
     current_row = 36
     for hour in range(1, 25): 
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00")
+
         ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'] if hour in metrics_before.index else 0) 
         ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'] if hour in metrics_after.index else 0)
         current_row += 1
@@ -102,7 +82,7 @@ def write_all_data_to_excel(excel_file_path, df_combined, df_before_full, df_aft
     ws_sheet1['D35'] = '施工後 平均kWh/h'
     ws_sheet1['A35'] = '時間帯'
 
-    # --- 3. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
+    # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
     if SUMMARY_SHEET_NAME not in workbook.sheetnames:
         workbook.create_sheet(SUMMARY_SHEET_NAME)
         
@@ -200,6 +180,11 @@ def main_streamlit_app():
             df_combined['年'] = pd.to_numeric(df_combined['年'], errors='coerce').astype('Int64')
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
+            
+            # --- データの重複削除 (同一日時レコードの削除) ---
+            df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
+            # --------------------------------------------------
+            
             df_combined.dropna(subset=['年', '月', '日'], inplace=True)
             
             df_combined['日付'] = pd.to_datetime(
@@ -211,10 +196,13 @@ def main_streamlit_app():
             datetime_cols = ['年', '月', '日', '時', '日付']
             consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
             
-            # 💡 エラー修正: 列データに対して処理を実行
+            if not consumption_cols:
+                st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
+                sys.exit()
+
+            # 💡 全消費電力カラムの合算ロジック
             for col in consumption_cols:
                 df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
-            
             df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
 
 
@@ -231,7 +219,7 @@ def main_streamlit_app():
             
             # --- d) Excel書き込み ---
             
-            # Openpyxlのみで全データを書き込み
+            # 1. Openpyxlのみで全データを書き込み
             write_all_data_to_excel(temp_excel_path, df_combined, df_before_full, df_after_full, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
             
             
