@@ -34,7 +34,7 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # 💡 header=1 (2行目) をヘッダーとして読み込む
+            # 💡 header=1 (2行目) をヘッダーとして読み込む設定に戻す (CSV構造に合わせるため)
             df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
             
             if '年' in df.columns:
@@ -45,7 +45,6 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
-    # 汎用的なエラーを発生させる (Streamlitのキャッシュエラー回避)
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
@@ -95,4 +94,29 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
         start_h = f"{start_h_val:02d}:00"
-        end_h = f"{end
+        end_h = f"{end_h_val:02d}:00"
+        time_range = f"{start_h}～{end_h}"
+
+        ws_sheet1.cell(row=current_row, column=2, value=time_range) 
+        
+        # C列 (施工前 平均)
+        if metrics_before is not None and hour in metrics_before.index:
+             ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
+        else:
+             ws_sheet1.cell(row=current_row, column=3, value=0)
+             
+        # D列 (施工後 平均)
+        if metrics_after is not None and hour in metrics_after.index:
+             ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
+        else:
+             ws_sheet1.cell(row=current_row, column=4, value=0)
+             
+        current_row += 1
+    
+    ws_sheet1['C35'] = '施工前 平均kWh/h'
+    ws_sheet1['D35'] = '施工後 平均kWh/h'
+    ws_sheet1['A35'] = '時間帯'
+
+    # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
+    if SUMMARY_SHEET_NAME not in workbook.sheetnames:
+        workbook.create_sheet(SUMMARY_SHEET_NAME)
