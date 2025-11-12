@@ -34,12 +34,14 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
+            # ヘッダー行をスキップ (header=1, 0-indexed)
+            df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding) 
             
+            # 必要なカラム名 '年' が存在するかで成功を判断
             if '年' in df.columns:
-                 return df
+                return df
             else:
-                 continue
+                continue
 
         except Exception:
             continue
@@ -63,14 +65,15 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     days_before = (end_before - start_before).days + 1
     days_after = (end_after - start_after).days + 1
     
-    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
-    # 💡 NaNチェックを強化: sum()も NaN の場合は 0 とする
-    avg_daily_total_before = df_before['合計kWh'].sum() / days_before
-    if np.isnan(avg_daily_total_before): avg_daily_total_before = 0
+    # 【変更なし】測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
+    # これが「まとめ」シートのB7, B8および「Sheet1」のC33, D33に書き込まれる値です。
+    # これは (全期間の合計kWh) / (期間の日数) であり、期間中の日々の平均総消費電力を示します。
+    total_kWh_before = df_before['合計kWh'].sum()
+    total_kWh_after = df_after['合計kWh'].sum()
     
-    avg_daily_total_after = df_after['合計kWh'].sum() / days_after
-    if np.isnan(avg_daily_total_after): avg_daily_total_after = 0
-    
+    # NaNチェック
+    avg_daily_total_before = total_kWh_before / days_before if days_before > 0 and not np.isnan(total_kWh_before) else 0
+    avg_daily_total_after = total_kWh_after / days_after if days_after > 0 and not np.isnan(total_kWh_after) else 0
     
     # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) と合計値 (C33, D33) ---
     if SHEET1_NAME not in workbook.sheetnames:
@@ -82,43 +85,48 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_sheet1['C33'] = float(avg_daily_total_before)
     ws_sheet1['D33'] = float(avg_daily_total_after)
     
-    # 24時間別平均の計算と書き込み
-    metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
-    metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_after.empty else None
+    # 24時間別平均の計算
+    # 【ご要望反映】時間帯ごとにグルーピングし、「合計kWh」の平均値を算出
+    # これは、期間中の同じ時間帯（例：10時台）の平均消費電力を示します。
+    # pandasはNaNを含む行を自動で無視して平均を計算します。
+    metrics_before = df_before.groupby('時')['合計kWh'].mean()
+    metrics_after = df_after.groupby('時')['合計kWh'].mean()
 
     current_row = 36
-    for hour in range(1, 25): 
-        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
+    for hour in range(1, 25): # hourは1から24まで
+        # CSVデータによっては「時」が1-24（例：24=0時台）または0-23（例：0=0時台）の場合があるため、1-24で処理
         
+        # 見出しの設定
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
         start_h = f"{start_h_val:02d}:00"
         end_h = f"{end_h_val:02d}:00"
         time_range = f"{start_h}～{end_h}"
 
+        # A列: 内部IDとして使用（Excelの計算式には影響しない）
+        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
+        # B列: 時間帯表記
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
         # C列 (施工前 平均)
-        if metrics_before is not None and hour in metrics_before.index:
-             value = metrics_before.loc[hour, 'mean']
-             ws_sheet1.cell(row=current_row, column=3, value=float(value) if not np.isnan(value) else 0)
-        else:
-             ws_sheet1.cell(row=current_row, column=3, value=0)
-             
+        # hourがmetricsのインデックスにあればその平均値を、なければ0をセット
+        value_before = metrics_before.get(hour, 0)
+        # NaNチェックをして0.0を書き込む
+        ws_sheet1.cell(row=current_row, column=3, value=float(value_before) if not np.isnan(value_before) else 0.0)
+            
         # D列 (施工後 平均)
-        if metrics_after is not None and hour in metrics_after.index:
-             value = metrics_after.loc[hour, 'mean']
-             ws_sheet1.cell(row=current_row, column=4, value=float(value) if not np.isnan(value) else 0)
-        else:
-             ws_sheet1.cell(row=current_row, column=4, value=0)
-             
+        value_after = metrics_after.get(hour, 0)
+        # NaNチェックをして0.0を書き込む
+        ws_sheet1.cell(row=current_row, column=4, value=float(value_after) if not np.isnan(value_after) else 0.0)
+            
         current_row += 1
     
+    # シートのヘッダーがもし上書きされていなければ設定（テンプレートに依存）
     ws_sheet1['C35'] = '施工前 平均kWh/h'
     ws_sheet1['D35'] = '施工後 平均kWh/h'
     ws_sheet1['A35'] = '時間帯'
 
-    # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
+    # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1), 合計値 (B7, B8) の書き込み ---
     if SUMMARY_SHEET_NAME not in workbook.sheetnames:
         workbook.create_sheet(SUMMARY_SHEET_NAME)
         
@@ -139,10 +147,11 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary['H8'] = operating_hours
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
     
-    # まとめシートの合計値も書き込み (B7, B8を推定)
+    # まとめシートの合計値も書き込み (日別平均合計kWh)
     ws_summary['B7'] = float(avg_daily_total_before)
     ws_summary['B8'] = float(avg_daily_total_after)
     
+    # ファイルを保存
     workbook.save(excel_file_path)
     
     return True
@@ -176,6 +185,7 @@ def main_streamlit_app():
     
     with col_date1:
         st.subheader("🗓️ 施工前 測定期間")
+        # デフォルト値を少し現実に合わせて変更
         start_before = st.date_input("開始日", today - datetime.timedelta(days=30), key="start_b")
         end_before = st.date_input("終了日", today - datetime.timedelta(days=23), key="end_b")
         
@@ -194,19 +204,26 @@ def main_streamlit_app():
     
     # --- 3. 実行ボタン ---
     if st.button("🚀 データ処理を実行し、報告書をダウンロード"):
+        # 期間のバリデーション
+        if start_before >= end_before or start_after >= end_after:
+            st.error("🚨 期間の設定が不正です。開始日は終了日よりも前に設定してください。")
+            return
+
         try:
             # テンポラリフォルダのセットアップ
             temp_dir = "temp_data"
             os.makedirs(temp_dir, exist_ok=True)
             
             # --- a) テンプレートExcelファイルをGitHubからコピー ---
+            # NOTE: Streamlit Cloud環境では、このファイルはリポジトリのルートに存在する必要があります。
             if not os.path.exists(EXCEL_TEMPLATE_FILENAME):
-                 st.error(f"🚨 致命的なエラー: GitHubリポジトリにテンプレートファイル '{EXCEL_TEMPLATE_FILENAME}' が見つかりません。ファイル名を確認し、app.pyと同じ場所に配置してください。")
-                 return
+                # テンプレートファイルを読み込む代わりに、エラーを出力
+                st.error(f"🚨 致命的なエラー: Excelテンプレートファイル '{EXCEL_TEMPLATE_FILENAME}' が実行環境から見つかりません。")
+                return
 
             temp_excel_path = os.path.join(temp_dir, EXCEL_TEMPLATE_FILENAME)
             shutil.copy(EXCEL_TEMPLATE_FILENAME, temp_excel_path)
-                
+            
             # --- b) データ統合と前処理 ---
             all_data = []
             for csv_file in uploaded_csvs:
@@ -218,9 +235,10 @@ def main_streamlit_app():
             df_combined['年'] = pd.to_numeric(df_combined['年'], errors='coerce').astype('Int64')
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
-            df_combined['時'] = pd.to_numeric(df_combined['時'], errors='coerce').astype('Int64') # '時'カラムの型も変換
+            df_combined['時'] = pd.to_numeric(df_combined['時'], errors='coerce').astype('Int64')
             
             # --- データの重複削除 (同一日時レコードの削除) ---
+            # これにより、同じ「年/月/日/時」を持つレコードが複数ある場合、最初のもののみが残り、重複合算を防ぎます。
             df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
             
             df_combined.dropna(subset=['年', '月', '日', '時'], inplace=True) # 日時カラムにNaNがある行は削除
@@ -232,13 +250,15 @@ def main_streamlit_app():
             df_combined.dropna(subset=['日付'], inplace=True)
             
             datetime_cols = ['年', '月', '日', '時', '日付']
+            # E列以降のカラムを消費電力カラムとして特定
             consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
             
             if not consumption_cols:
-                st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
-                sys.exit()
+                st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。CSVの形式を確認してください。")
+                return
 
             # 消費電力カラムの数値変換と合算ロジック
+            # 【ご要望反映】E列以降の数値を全て合算して「合計kWh」を作成
             for col in consumption_cols:
                 df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
             
@@ -251,38 +271,32 @@ def main_streamlit_app():
             start_a = start_after
             end_a = end_after
 
-            df_before_full = df_combined[(df_combined['日付'] >= start_b) & (df_combined['日付'] <= end_b)].copy()
-            df_after_full = df_combined[(df_combined['日付'] >= start_a) & (df_combined['日付'] <= end_a)].copy()
+            # 測定期間内のデータを抽出
+            df_before = df_combined[(df_combined['日付'] >= start_b) & (df_combined['日付'] <= end_b)].copy()
+            df_after = df_combined[(df_combined['日付'] >= start_a) & (df_combined['日付'] <= end_a)].copy()
             
-            df_before = df_before_full.copy()
-            df_after = df_after_full.copy()
-            
+            # データが空でないか確認
+            if df_before.empty:
+                st.warning(f"🚨 施工前期間（{start_b}～{end_b}）に対応するデータがアップロードされたCSVファイルに見つかりませんでした。")
+            if df_after.empty:
+                st.warning(f"🚨 施工後期間（{start_a}～{end_a}）に対応するデータがアップロードされたCSVファイルに見つかりませんでした。")
+                
             # --- d) Excel書き込み ---
             
-            # Openpyxlのみでデータシートの書き込み (現在はレポートシートのみ更新)
-            def append_df_to_sheet(workbook, sheet_name, df_data):
-                if sheet_name not in workbook.sheetnames:
-                    workbook.create_sheet(sheet_name)
-                ws = workbook[sheet_name]
-                
-                if ws.max_row > 1:
-                    ws.delete_rows(2, ws.max_row) 
+            # OpenPyXLでSheet1とまとめシートを更新（時間帯別平均値と期間情報）
+            success = write_excel_reports(temp_excel_path, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
+            
+            if not success:
+                # write_excel_reports内でエラーメッセージが表示されているため、ここでreturn
+                return 
 
-                rows = dataframe_to_rows(df_data, header=False, index=False)
-                for r_idx, row in enumerate(rows, 1):
-                     ws.append(row)
-                
-            existing_workbook = openpyxl.load_workbook(temp_excel_path)
-            
-            # 2. OpenPyXLでSheet1とまとめシートを更新
-            write_excel_reports(temp_excel_path, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
-            
             
             # --- e) ファイル名の変更とダウンロードの準備 ---
             today_date_str = datetime.date.today().strftime('%Y%m%d')
             new_file_name = f"{store_name}：電力報告書{today_date_str}.xlsx"
             
             final_path = os.path.join(temp_dir, new_file_name)
+            # shutil.copyではなく、openpyxl.save()がtemp_excel_pathに保存済みなので、名前を変更する
             os.rename(temp_excel_path, final_path)
             
             # ダウンロードボタンの表示
@@ -297,7 +311,7 @@ def main_streamlit_app():
             
         except Exception as e:
             st.error("🚨 実行中にエラーが発生しました。ファイル形式と入力値を確認してください。")
-            st.warning("特に、CSVのヘッダー行が「年,月,日,時,kWh,...」の形式が崩れていないか確認してください。")
+            st.warning("特に、CSVのヘッダー行が「年,月,日,時,...」の形式が崩れていないか、またE列以降に数値データが含まれているか確認してください。")
             st.exception(e)
 
 if __name__ == "__main__":
