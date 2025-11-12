@@ -34,8 +34,8 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # 💡 修正: header=1 (2行目) をヘッダーとして読み込む設定に戻す
-            df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
+            # 💡 修正: header=0 (1行目) をヘッダーとして読み込む
+            df = pd.read_csv(io.BytesIO(raw_data), header=0, encoding=encoding)
             
             if '年' in df.columns:
                  return df
@@ -45,7 +45,6 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
-    # 汎用的なエラーを発生させる
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
@@ -87,36 +86,55 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_after.empty else None
 
     current_row = 36
-    for hour in range(1, 25): 
-        # A列: 時間ラベル (e.g., "01:00")
-        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
+    # 💡 修正: 0時から23時までループ (合計24時間分)
+    for hour in range(0, 24): 
         
-        # B列: 時間帯ラベル (e.g., "00:00～01:00")
-        start_h_val = (hour - 1) % 24
-        end_h_val = hour % 24
-        start_h = f"{start_h_val:02d}:00"
-        end_h = f"{end_h_val:02d}:00"
+        # CSVの '時' カラムの値は 1-24 または 0-23 のどちらかの可能性あり。
+        # 0:00 のデータは CSV上は '時'=0 または '時'=24 であるため、両方を考慮
+        
+        # CSVの '時'カラムが 1-24 の場合: hour+1
+        # CSVの '時'カラムが 0-23 の場合: hour
+        
+        # 両方に対応するため、hour (0-23) をキーとして使用し、0時と24時(翌日0時)を区別せず集計します。
+        
+        # テンプレートに合わせた時間帯ラベルの計算 (例: 00:00～01:00)
+        display_hour = (hour + 1) % 24
+        if display_hour == 0:
+            display_hour = 24 # 24時として表示
+            
+        start_h = f"{hour:02d}:00"
+        end_h = f"{display_hour:02d}:00"
         time_range = f"{start_h}～{end_h}"
-
+        
+        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}") # A列に00, 01, ...
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
         # C列 (施工前 平均)
-        if metrics_before is not None and hour in metrics_before.index:
-             ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
-        else:
-             ws_sheet1.cell(row=current_row, column=3, value=0)
-             
+        # 💡 CSVの '時' カラムが 1-24 の場合と 0-23 の場合の両方に対応
+        mean_b = 0
+        if metrics_before is not None:
+             if hour in metrics_before.index: # 0-23時形式の場合
+                 mean_b = metrics_before.loc[hour, 'mean']
+             elif hour + 1 in metrics_before.index: # 1-24時形式の場合 (例: 0時データは24時として記録)
+                 mean_b = metrics_before.loc[hour + 1, 'mean']
+        ws_sheet1.cell(row=current_row, column=3, value=mean_b)
+
         # D列 (施工後 平均)
-        if metrics_after is not None and hour in metrics_after.index:
-             ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
-        else:
-             ws_sheet1.cell(row=current_row, column=4, value=0)
+        mean_a = 0
+        if metrics_after is not None:
+             if hour in metrics_after.index:
+                 mean_a = metrics_after.loc[hour, 'mean']
+             elif hour + 1 in metrics_after.index:
+                 mean_a = metrics_after.loc[hour + 1, 'mean']
+        ws_sheet1.cell(row=current_row, column=4, value=mean_a)
              
         current_row += 1
     
     ws_sheet1['C35'] = '施工前 平均kWh/h'
     ws_sheet1['D35'] = '施工後 平均kWh/h'
-    ws_sheet1['A35'] = '時間帯'
+    ws_sheet1['A35'] = '時' # 時刻のインデックスを示す
+    ws_sheet1['B35'] = '時間帯'
+
 
     # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
     if SUMMARY_SHEET_NAME not in workbook.sheetnames:
@@ -125,6 +143,9 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary = workbook[SUMMARY_SHEET_NAME]
 
     format_date = lambda d: f"{d.year}/{d.month}/{d.day}"
+
+    days_before = (end_before - start_before).days + 1
+    days_after = (end_after - start_after).days + 1
 
     start_b_str = format_date(start_before)
     end_b_str = format_date(end_before)
@@ -177,12 +198,12 @@ def main_streamlit_app():
     with col_date1:
         st.subheader("🗓️ 施工前 測定期間")
         start_before = st.date_input("開始日", today - datetime.timedelta(days=30), key="start_b")
-        end_before = st.date_input("終了日", today - datetime.timedelta(days=25), key="end_b")
+        end_before = st.date_input("終了日", today - datetime.timedelta(days=23), key="end_b")
         
     with col_date2:
         st.subheader("📅 施工後 測定期間")
-        start_after = st.date_input("開始日", today - datetime.timedelta(days=10), key="start_a")
-        end_after = st.date_input("終了日", today - datetime.timedelta(days=5), key="end_a")
+        start_after = st.date_input("開始日", today - datetime.timedelta(days=14), key="start_a")
+        end_after = st.date_input("終了日", today - datetime.timedelta(days=7), key="end_a")
 
     col_info1, col_info2 = st.columns(2)
     with col_info1:
@@ -219,92 +240,4 @@ def main_streamlit_app():
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
             
-            # --- データの重複削除を合算に置き換え (最終ロジック) ---
-            
-            # 1. consumption_colsを特定
-            datetime_cols = ['年', '月', '日', '時']
-            consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
-            
-            if not consumption_cols:
-                st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
-                sys.exit()
-
-            # 2. 消費電力カラムの数値変換と欠損値処理
-            for col in consumption_cols:
-                df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
-            
-            # 3. 同一日時でグループ化し、全消費電力を合算 (合計kWhもここで再計算)
-            group_cols = ['年', '月', '日', '時']
-            df_combined = df_combined.groupby(group_cols, as_index=False)[consumption_cols].sum()
-            
-            # 4. 合計kWh列を最終確定
-            df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
-
-
-            # --- 日付列の最終確定 ---
-            df_combined['日付'] = pd.to_datetime(
-                df_combined['年'].astype(str) + '-' + df_combined['月'].astype(str) + '-' + df_combined['日'].astype('str'), 
-                format='%Y-%m-%d', errors='coerce'
-            ).dt.date
-            df_combined.dropna(subset=['日付'], inplace=True)
-
-
-            # --- c) データ分割 ---
-            start_b = start_before
-            end_b = end_before
-            start_a = start_after
-            end_a = end_after
-
-            df_before_full = df_combined[(df_combined['日付'] >= start_b) & (df_combined['日付'] <= end_b)].copy()
-            df_after_full = df_combined[(df_combined['日付'] >= start_a) & (df_combined['日付'] <= end_a)].copy()
-            
-            df_before = df_before_full.copy()
-            df_after = df_after_full.copy()
-            
-            # --- d) Excel書き込み ---
-            
-            # 1. Openpyxlのみでデータシートの書き込み
-            def append_df_to_sheet(workbook, sheet_name, df_data):
-                if sheet_name not in workbook.sheetnames:
-                    workbook.create_sheet(sheet_name)
-                ws = workbook[sheet_name]
-                
-                # 既存のデータをクリア (ヘッダー行を残すため2行目以降を削除)
-                if ws.max_row > 1:
-                    ws.delete_rows(2, ws.max_row) 
-
-                # データ書き込み (ヘッダーを無視してデータのみ追記)
-                rows = dataframe_to_rows(df_data, header=False, index=False)
-                for r_idx, row in enumerate(rows, 1):
-                     ws.append(row)
-                
-            existing_workbook = openpyxl.load_workbook(temp_excel_path)
-            
-            # 2. OpenPyXLでSheet1とまとめシートを更新
-            write_excel_reports(temp_excel_path, df_before, df_after, start_b, end_b, start_a, end_a, operating_hours, store_name)
-            
-            
-            # --- e) ファイル名の変更とダウンロードの準備 ---
-            today_date_str = datetime.date.today().strftime('%Y%m%d')
-            new_file_name = f"{store_name}：電力報告書{today_date_str}.xlsx"
-            
-            final_path = os.path.join(temp_dir, new_file_name)
-            os.rename(temp_excel_path, final_path)
-            
-            # ダウンロードボタンの表示
-            with open(final_path, "rb") as file:
-                st.success("✅ 処理が完了しました！以下のボタンから報告書をダウンロードしてください。")
-                st.download_button(
-                    label="⬇️ 報告書ファイルをダウンロード",
-                    data=file,
-                    file_name=new_file_name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            
-        except Exception as e:
-            st.error("🚨 実行中にエラーが発生しました。ファイル形式と入力値を確認してください。")
-            st.warning("特に、CSVのヘッダー行が「年,月,日,時,kWh,...」の形式が崩れていないか確認してください。")
-            st.exception(e)
-
-if __name__ == "__main__":
-    main_streamlit_app()
+            # --- データの重複削除 (同一日時レコードの削除) ---
