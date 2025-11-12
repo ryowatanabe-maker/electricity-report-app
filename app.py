@@ -13,9 +13,9 @@ import io
 import numpy as np
 
 # ======================================================
-# 💡 設定: ファイル名
+# 💡 設定: ファイル名 (元のファイル名に固定)
 # ======================================================
-EXCEL_TEMPLATE_FILENAME = '電力報告テンプレート.xlsx'
+EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
 
 
 # --- CSV読み込み関数 (自動エンコーディング検出) ---
@@ -34,7 +34,7 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # header=1 (2行目) をヘッダーとして読み込む設定
+            # 💡 header=1 (2行目) をヘッダーとして読み込む設定に戻す
             df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
             
             if '年' in df.columns:
@@ -45,11 +45,10 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
-    # 汎用的なエラーを発生させる (Streamlitのキャッシュエラー回避)
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excelレポート書き込み関数 ---
+# --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
     """
     Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
@@ -92,93 +91,4 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
         # B列: 時間帯ラベル (e.g., "00:00～01:00")
-        start_h_val = (hour - 1) % 24
-        end_h_val = hour % 24
-        start_h = f"{start_h_val:02d}:00"
-        end_h = f"{end_h_val:02d}:00"
-        time_range = f"{start_h}～{end_h}"
-
-        ws_sheet1.cell(row=current_row, column=2, value=time_range) 
-        
-        # C列 (施工前 平均)
-        if metrics_before is not None and hour in metrics_before.index:
-             ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
-        else:
-             ws_sheet1.cell(row=current_row, column=3, value=0)
-             
-        # D列 (施工後 平均)
-        if metrics_after is not None and hour in metrics_after.index:
-             ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
-        else:
-             ws_sheet1.cell(row=current_row, column=4, value=0)
-             
-        current_row += 1
-    
-    ws_sheet1['C35'] = '施工前 平均kWh/h'
-    ws_sheet1['D35'] = '施工後 平均kWh/h'
-    ws_sheet1['A35'] = '時間帯'
-
-    # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
-    if SUMMARY_SHEET_NAME not in workbook.sheetnames:
-        workbook.create_sheet(SUMMARY_SHEET_NAME)
-        
-    ws_summary = workbook[SUMMARY_SHEET_NAME]
-
-    format_date = lambda d: f"{d.year}/{d.month}/{d.day}"
-
-    start_b_str = format_date(start_before)
-    end_b_str = format_date(end_before)
-    before_str = f"施工前：{start_b_str}～{end_b_str}（{days_before}日間）"
-    
-    start_a_str = format_date(start_after)
-    end_a_str = format_date(end_after)
-    after_str = f"施工後(調光後)：{start_a_str}～{end_a_str}（{days_after}日間）"
-
-    ws_summary['H6'] = before_str
-    ws_summary['H7'] = after_str
-    ws_summary['H8'] = operating_hours
-    ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
-    
-    # まとめシートの合計値も書き込み (B7, B8を推定)
-    ws_summary['B7'] = avg_daily_total_before
-    ws_summary['B8'] = avg_daily_total_after
-    
-    workbook.save(excel_file_path)
-    
-    return True
-
-
-# --- Streamlitメインアプリケーション ---
-def main_streamlit_app():
-    st.set_page_config(layout="wide", page_title="電力データ報告書作成アプリ")
-    st.title("💡 電力データ自動処理アプリ")
-    st.markdown("### Step 1: ファイルのアップロード")
-    
-    # --- 1. CSVファイルのアップロード ---
-    uploaded_csvs = st.file_uploader(
-        "📈 CSVデータ (複数可) をアップロードしてください",
-        type=['csv'],
-        accept_multiple_files=True
-    )
-    
-    if uploaded_csvs:
-        st.success(f"CSVファイル {len(uploaded_csvs)}個 が準備できました。")
-        st.markdown("---")
-        st.markdown("### Step 2: 期間と情報の入力")
-    else:
-        st.warning("処理を開始するには、CSVデータをアップロードしてください。")
-        return
-
-    # --- 2. ユーザー入力ウィジェット ---
-    today = datetime.date.today()
-    
-    col_date1, col_date2 = st.columns(2)
-    
-    with col_date1:
-        st.subheader("🗓️ 施工前 測定期間")
-        start_before = st.date_input("開始日", today - datetime.timedelta(days=30), key="start_b")
-        end_before = st.date_input("終了日", today - datetime.timedelta(days=23), key="end_b")
-        
-    with col_date2:
-        st.subheader("📅 施工後 測定期間")
-        start
+        start_h_val = (hour - 1)
