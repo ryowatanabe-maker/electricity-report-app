@@ -34,8 +34,8 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # 💡 修正: header=0 (1行目) をヘッダーとして読み込む
-            df = pd.read_csv(io.BytesIO(raw_data), header=0, encoding=encoding)
+            # 💡 修正: header=1 (2行目) に戻す
+            df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
             
             if '年' in df.columns:
                  return df
@@ -45,14 +45,13 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
+    # 汎用的なエラーを発生させる (Streamlitのキャッシュエラー回避)
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
+# --- Excelレポート書き込み関数 ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    """
-    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
-    """
+    # ... (この関数は変更なし) ...
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -66,7 +65,6 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     days_before = (end_before - start_before).days + 1
     days_after = (end_after - start_after).days + 1
     
-    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
     avg_daily_total_before = df_before['合計kWh'].sum() / days_before if not df_before.empty else 0
     avg_daily_total_after = df_after['合計kWh'].sum() / days_after if not df_after.empty else 0
     
@@ -77,64 +75,39 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         
     ws_sheet1 = workbook[SHEET1_NAME]
     
-    # C33, D33に日別平均合計値を書き込む
     ws_sheet1['C33'] = avg_daily_total_before
     ws_sheet1['D33'] = avg_daily_total_after
     
-    # 24時間別平均の計算と書き込み
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_after.empty else None
 
     current_row = 36
-    # 💡 修正: 0時から23時までループ (合計24時間分)
-    for hour in range(0, 24): 
+    for hour in range(1, 25): 
+        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
-        # CSVの '時' カラムの値は 1-24 または 0-23 のどちらかの可能性あり。
-        # 0:00 のデータは CSV上は '時'=0 または '時'=24 であるため、両方を考慮
-        
-        # CSVの '時'カラムが 1-24 の場合: hour+1
-        # CSVの '時'カラムが 0-23 の場合: hour
-        
-        # 両方に対応するため、hour (0-23) をキーとして使用し、0時と24時(翌日0時)を区別せず集計します。
-        
-        # テンプレートに合わせた時間帯ラベルの計算 (例: 00:00～01:00)
-        display_hour = (hour + 1) % 24
-        if display_hour == 0:
-            display_hour = 24 # 24時として表示
-            
-        start_h = f"{hour:02d}:00"
-        end_h = f"{display_hour:02d}:00"
+        start_h_val = (hour - 1) % 24
+        end_h_val = hour % 24
+        start_h = f"{start_h_val:02d}:00"
+        end_h = f"{end_h_val:02d}:00"
         time_range = f"{start_h}～{end_h}"
-        
-        ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}") # A列に00, 01, ...
+
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
-        # C列 (施工前 平均)
-        # 💡 CSVの '時' カラムが 1-24 の場合と 0-23 の場合の両方に対応
-        mean_b = 0
-        if metrics_before is not None:
-             if hour in metrics_before.index: # 0-23時形式の場合
-                 mean_b = metrics_before.loc[hour, 'mean']
-             elif hour + 1 in metrics_before.index: # 1-24時形式の場合 (例: 0時データは24時として記録)
-                 mean_b = metrics_before.loc[hour + 1, 'mean']
-        ws_sheet1.cell(row=current_row, column=3, value=mean_b)
-
-        # D列 (施工後 平均)
-        mean_a = 0
-        if metrics_after is not None:
-             if hour in metrics_after.index:
-                 mean_a = metrics_after.loc[hour, 'mean']
-             elif hour + 1 in metrics_after.index:
-                 mean_a = metrics_after.loc[hour + 1, 'mean']
-        ws_sheet1.cell(row=current_row, column=4, value=mean_a)
+        if metrics_before is not None and hour in metrics_before.index:
+             ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
+        else:
+             ws_sheet1.cell(row=current_row, column=3, value=0)
+             
+        if metrics_after is not None and hour in metrics_after.index:
+             ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
+        else:
+             ws_sheet1.cell(row=current_row, column=4, value=0)
              
         current_row += 1
     
     ws_sheet1['C35'] = '施工前 平均kWh/h'
     ws_sheet1['D35'] = '施工後 平均kWh/h'
-    ws_sheet1['A35'] = '時' # 時刻のインデックスを示す
-    ws_sheet1['B35'] = '時間帯'
-
+    ws_sheet1['A35'] = '時間帯'
 
     # --- 2. まとめシート: 期間 (H6, H7), 営業時間 (H8), タイトル (B1) の書き込み ---
     if SUMMARY_SHEET_NAME not in workbook.sheetnames:
@@ -143,9 +116,6 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary = workbook[SUMMARY_SHEET_NAME]
 
     format_date = lambda d: f"{d.year}/{d.month}/{d.day}"
-
-    days_before = (end_before - start_before).days + 1
-    days_after = (end_after - start_after).days + 1
 
     start_b_str = format_date(start_before)
     end_b_str = format_date(end_before)
@@ -246,7 +216,7 @@ def main_streamlit_app():
             df_combined.dropna(subset=['年', '月', '日'], inplace=True)
             
             df_combined['日付'] = pd.to_datetime(
-                df_combined['年'].astype(str) + '-' + df_combined['月'].astype(str) + '-' + df_combined['日'].astype('str'), 
+                df_combined['年'].astype(str) + '-' + df_combined['月'].astype('str') + '-' + df_combined['日'].astype('str'), 
                 format='%Y-%m-%d', errors='coerce'
             ).dt.date
             df_combined.dropna(subset=['日付'], inplace=True)
