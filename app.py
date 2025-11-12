@@ -18,7 +18,7 @@ import numpy as np
 EXCEL_TEMPLATE_FILENAME = '富士川店：電力報告250130.xlsx'
 
 
-# --- CSV読み込み関数 (自動エンコーディング検出) ---
+# --- CSV読み込み関数 (変更なし) ---
 @st.cache_data
 def detect_and_read_csv(uploaded_file):
     """アップロードされたファイルの内容を読み込み、エンコーディングを自動検出してDataFrameを返す"""
@@ -47,11 +47,9 @@ def detect_and_read_csv(uploaded_file):
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
+# --- Excelレポート書き込み関数 ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    """
-    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
-    """
+    
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -66,8 +64,12 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     days_after = (end_after - start_after).days + 1
     
     # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
-    avg_daily_total_before = df_before['合計kWh'].sum() / days_before if not df_before.empty else 0
-    avg_daily_total_after = df_after['合計kWh'].sum() / days_after if not df_after.empty else 0
+    # 💡 NaNチェックを強化: sum()も NaN の場合は 0 とする
+    avg_daily_total_before = df_before['合計kWh'].sum() / days_before
+    if np.isnan(avg_daily_total_before): avg_daily_total_before = 0
+    
+    avg_daily_total_after = df_after['合計kWh'].sum() / days_after
+    if np.isnan(avg_daily_total_after): avg_daily_total_after = 0
     
     
     # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) と合計値 (C33, D33) ---
@@ -77,8 +79,8 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_sheet1 = workbook[SHEET1_NAME]
     
     # C33, D33に日別平均合計値を書き込む
-    ws_sheet1['C33'] = avg_daily_total_before
-    ws_sheet1['D33'] = avg_daily_total_after
+    ws_sheet1['C33'] = float(avg_daily_total_before)
+    ws_sheet1['D33'] = float(avg_daily_total_after)
     
     # 24時間別平均の計算と書き込み
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
@@ -86,10 +88,8 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
 
     current_row = 36
     for hour in range(1, 25): 
-        # A列: 時間ラベル (e.g., "01:00")
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
-        # B列: 時間帯ラベル (e.g., "00:00～01:00")
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
         start_h = f"{start_h_val:02d}:00"
@@ -100,13 +100,15 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         
         # C列 (施工前 平均)
         if metrics_before is not None and hour in metrics_before.index:
-             ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
+             value = metrics_before.loc[hour, 'mean']
+             ws_sheet1.cell(row=current_row, column=3, value=float(value) if not np.isnan(value) else 0)
         else:
              ws_sheet1.cell(row=current_row, column=3, value=0)
              
         # D列 (施工後 平均)
         if metrics_after is not None and hour in metrics_after.index:
-             ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
+             value = metrics_after.loc[hour, 'mean']
+             ws_sheet1.cell(row=current_row, column=4, value=float(value) if not np.isnan(value) else 0)
         else:
              ws_sheet1.cell(row=current_row, column=4, value=0)
              
@@ -138,8 +140,8 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
     
     # まとめシートの合計値も書き込み (B7, B8を推定)
-    ws_summary['B7'] = avg_daily_total_before
-    ws_summary['B8'] = avg_daily_total_after
+    ws_summary['B7'] = float(avg_daily_total_before)
+    ws_summary['B8'] = float(avg_daily_total_after)
     
     workbook.save(excel_file_path)
     
@@ -216,37 +218,31 @@ def main_streamlit_app():
             df_combined['年'] = pd.to_numeric(df_combined['年'], errors='coerce').astype('Int64')
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
-            df_combined['時'] = pd.to_numeric(df_combined['時'], errors='coerce').astype('Int64')
+            df_combined['時'] = pd.to_numeric(df_combined['時'], errors='coerce').astype('Int64') # '時'カラムの型も変換
             
-            df_combined.dropna(subset=['年', '月', '日', '時'], inplace=True)
+            # --- データの重複削除 (同一日時レコードの削除) ---
+            df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
             
-            # 1. consumption_colsを特定 (日付/時刻/Unnamed以外の全ての列)
-            datetime_cols = ['年', '月', '日', '時']
+            df_combined.dropna(subset=['年', '月', '日', '時'], inplace=True) # 日時カラムにNaNがある行は削除
+            
+            df_combined['日付'] = pd.to_datetime(
+                df_combined['年'].astype(str) + '-' + df_combined['月'].astype('str') + '-' + df_combined['日'].astype('str'), 
+                format='%Y-%m-%d', errors='coerce'
+            ).dt.date
+            df_combined.dropna(subset=['日付'], inplace=True)
+            
+            datetime_cols = ['年', '月', '日', '時', '日付']
             consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
             
             if not consumption_cols:
                 st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
                 sys.exit()
 
-            # 2. 消費電力カラムの数値変換と欠損値処理
+            # 消費電力カラムの数値変換と合算ロジック
             for col in consumption_cols:
                 df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
             
-            # 3. 💡 合算処理 (重複レコードを足し合わせる)
-            group_cols = ['年', '月', '日', '時']
-            # 同じ日時を持つ全ての消費電力を合算する
-            df_combined = df_combined.groupby(group_cols, as_index=False)[consumption_cols].sum()
-            
-            # 4. 合計kWh列を最終確定
             df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
-
-
-            # --- 日付列の最終確定 ---
-            df_combined['日付'] = pd.to_datetime(
-                df_combined['年'].astype(str) + '-' + df_combined['月'].astype('str') + '-' + df_combined['日'].astype('str'), 
-                format='%Y-%m-%d', errors='coerce'
-            ).dt.date
-            df_combined.dropna(subset=['日付'], inplace=True)
 
 
             # --- c) データ分割 ---
@@ -263,17 +259,15 @@ def main_streamlit_app():
             
             # --- d) Excel書き込み ---
             
-            # 1. Openpyxlのみでデータシートの書き込み
+            # Openpyxlのみでデータシートの書き込み (現在はレポートシートのみ更新)
             def append_df_to_sheet(workbook, sheet_name, df_data):
                 if sheet_name not in workbook.sheetnames:
                     workbook.create_sheet(sheet_name)
                 ws = workbook[sheet_name]
                 
-                # 既存のデータをクリア (ヘッダー行を残すため2行目以降を削除)
                 if ws.max_row > 1:
                     ws.delete_rows(2, ws.max_row) 
 
-                # データ書き込み (ヘッダーを無視してデータのみ追記)
                 rows = dataframe_to_rows(df_data, header=False, index=False)
                 for r_idx, row in enumerate(rows, 1):
                      ws.append(row)
