@@ -34,7 +34,6 @@ def detect_and_read_csv(uploaded_file):
 
     for encoding in encodings_to_try:
         try:
-            # 💡 修正: header=1 (2行目) に戻す
             df = pd.read_csv(io.BytesIO(raw_data), header=1, encoding=encoding)
             
             if '年' in df.columns:
@@ -45,13 +44,14 @@ def detect_and_read_csv(uploaded_file):
         except Exception:
             continue
             
-    # 汎用的なエラーを発生させる (Streamlitのキャッシュエラー回避)
     raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
 
 
-# --- Excelレポート書き込み関数 ---
+# --- Excelレポート書き込み関数 (Openpyxlで統計値を書き込む) ---
 def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    # ... (この関数は変更なし) ...
+    """
+    Openpyxlを使って、Sheet1とまとめシートにレポート情報を書き込む。
+    """
     SHEET1_NAME = 'Sheet1'
     SUMMARY_SHEET_NAME = 'まとめ'
     
@@ -65,6 +65,7 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     days_before = (end_before - start_before).days + 1
     days_after = (end_after - start_after).days + 1
     
+    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
     avg_daily_total_before = df_before['合計kWh'].sum() / days_before if not df_before.empty else 0
     avg_daily_total_after = df_after['合計kWh'].sum() / days_after if not df_after.empty else 0
     
@@ -75,16 +76,20 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         
     ws_sheet1 = workbook[SHEET1_NAME]
     
+    # C33, D33に日別平均合計値を書き込む
     ws_sheet1['C33'] = avg_daily_total_before
     ws_sheet1['D33'] = avg_daily_total_after
     
+    # 24時間別平均の計算と書き込み
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_after.empty else None
 
     current_row = 36
     for hour in range(1, 25): 
+        # A列: 時間ラベル (e.g., "01:00")
         ws_sheet1.cell(row=current_row, column=1, value=f"{hour:02d}:00") 
         
+        # B列: 時間帯ラベル (e.g., "00:00～01:00")
         start_h_val = (hour - 1) % 24
         end_h_val = hour % 24
         start_h = f"{start_h_val:02d}:00"
@@ -93,11 +98,13 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
 
         ws_sheet1.cell(row=current_row, column=2, value=time_range) 
         
+        # C列 (施工前 平均)
         if metrics_before is not None and hour in metrics_before.index:
              ws_sheet1.cell(row=current_row, column=3, value=metrics_before.loc[hour, 'mean'])
         else:
              ws_sheet1.cell(row=current_row, column=3, value=0)
              
+        # D列 (施工後 平均)
         if metrics_after is not None and hour in metrics_after.index:
              ws_sheet1.cell(row=current_row, column=4, value=metrics_after.loc[hour, 'mean'])
         else:
@@ -209,30 +216,37 @@ def main_streamlit_app():
             df_combined['年'] = pd.to_numeric(df_combined['年'], errors='coerce').astype('Int64')
             df_combined['月'] = pd.to_numeric(df_combined['月'], errors='coerce').astype('Int64')
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
+            df_combined['時'] = pd.to_numeric(df_combined['時'], errors='coerce').astype('Int64')
             
-            # --- データの重複削除 (同一日時レコードの削除) ---
-            df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
+            df_combined.dropna(subset=['年', '月', '日', '時'], inplace=True)
             
-            df_combined.dropna(subset=['年', '月', '日'], inplace=True)
-            
-            df_combined['日付'] = pd.to_datetime(
-                df_combined['年'].astype(str) + '-' + df_combined['月'].astype('str') + '-' + df_combined['日'].astype('str'), 
-                format='%Y-%m-%d', errors='coerce'
-            ).dt.date
-            df_combined.dropna(subset=['日付'], inplace=True)
-            
-            datetime_cols = ['年', '月', '日', '時', '日付']
+            # 1. consumption_colsを特定 (日付/時刻/Unnamed以外の全ての列)
+            datetime_cols = ['年', '月', '日', '時']
             consumption_cols = [col for col in df_combined.columns if col not in datetime_cols and not col.startswith('Unnamed:')]
             
             if not consumption_cols:
                 st.error("エラー: E列以降に消費電力データ（kWhや回路データ）のカラムが見つかりませんでした。")
                 sys.exit()
 
-            # 消費電力カラムの数値変換と合算ロジック
+            # 2. 消費電力カラムの数値変換と欠損値処理
             for col in consumption_cols:
                 df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').fillna(0)
             
+            # 3. 💡 合算処理 (重複レコードを足し合わせる)
+            group_cols = ['年', '月', '日', '時']
+            # 同じ日時を持つ全ての消費電力を合算する
+            df_combined = df_combined.groupby(group_cols, as_index=False)[consumption_cols].sum()
+            
+            # 4. 合計kWh列を最終確定
             df_combined['合計kWh'] = df_combined[consumption_cols].sum(axis=1)
+
+
+            # --- 日付列の最終確定 ---
+            df_combined['日付'] = pd.to_datetime(
+                df_combined['年'].astype(str) + '-' + df_combined['月'].astype('str') + '-' + df_combined['日'].astype('str'), 
+                format='%Y-%m-%d', errors='coerce'
+            ).dt.date
+            df_combined.dropna(subset=['日付'], inplace=True)
 
 
             # --- c) データ分割 ---
