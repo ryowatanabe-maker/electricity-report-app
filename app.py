@@ -40,7 +40,6 @@ def detect_and_read_csv(uploaded_file):
             # ヘッダーとして使用する行（年,月,日,時,...の行）を特定
             header_row_index = -1
             if not df_full.empty:
-                 # '年'を含む行を探し、それをヘッダー行とする
                 for i in range(df_full.shape[0]):
                     # 最初の4カラムに '年', '月', '日', '時' が含まれているかチェック
                     row_values = df_full.iloc[i].astype(str).tolist()
@@ -69,12 +68,10 @@ def detect_and_read_csv(uploaded_file):
                     cleaned_columns.append(f'kWh_{kWh_counter}')
                     kWh_counter += 1
                 else:
-                    # これは発生しないはずだが、念のため
                     cleaned_columns.append(f'Unnamed_{i}')
 
             df.columns = cleaned_columns
 
-            # データが存在し、必要なカラム名 '年' が存在するかで成功を判断
             if '年' in df.columns and not df.empty:
                 return df
             else:
@@ -82,3 +79,44 @@ def detect_and_read_csv(uploaded_file):
 
         except Exception:
             continue
+            
+    raise Exception(f"ファイル '{uploaded_file.name}' は、一般的な日本語エンコーディングで読み込めませんでした。")
+
+
+# --- Excelレポート書き込み関数 ---
+def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
+    
+    SHEET1_NAME = 'Sheet1'
+    SUMMARY_SHEET_NAME = 'まとめ'
+    
+    try:
+        # テンプレートExcelファイルを読み込む
+        workbook = openpyxl.load_workbook(excel_file_path)
+    except FileNotFoundError:
+        st.error(f"エラー: Excelテンプレートが見つかりません。")
+        return False
+
+    # --- 共通計算 ---
+    days_before = (end_before - start_before).days + 1
+    days_after = (end_after - start_after).days + 1
+    
+    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
+    total_kWh_before = df_before['合計kWh'].sum()
+    total_kWh_after = df_after['合計kWh'].sum()
+    
+    # NaN/ZeroDivision チェック
+    avg_daily_total_before = total_kWh_before / days_before if days_before > 0 and not np.isnan(total_kWh_before) else 0
+    avg_daily_total_after = total_kWh_after / days_after if days_after > 0 and not np.isnan(total_kWh_after) else 0
+    
+    # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) と合計値 (C33, D33) ---
+    if SHEET1_NAME not in workbook.sheetnames:
+        workbook.create_sheet(SHEET1_NAME) 
+        
+    ws_sheet1 = workbook[SHEET1_NAME]
+    
+    # C33, D33に日別平均合計値を書き込む
+    ws_sheet1['C33'] = float(avg_daily_total_before)
+    ws_sheet1['D33'] = float(avg_daily_total_after)
+    
+    # 24時間別平均の計算（「時」カラムは0-23に標準化済み）
+    metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
