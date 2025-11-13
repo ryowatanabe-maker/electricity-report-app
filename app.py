@@ -100,21 +100,25 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     days_before = (end_before - start_before).days + 1
     days_after = (end_after - start_after).days + 1
     
-    # 測定期間中の日別平均合計kWhを計算 (合計kWhを総日数で割る)
+    # 測定期間中の合計kWhを計算 (この値は計算するが、日別平均は計算しない)
     total_kWh_before = df_before['合計kWh'].sum()
     total_kWh_after = df_after['合計kWh'].sum()
     
-    # NaN/ZeroDivision チェック
-    avg_daily_total_before = total_kWh_before / days_before if days_before > 0 and not np.isnan(total_kWh_before) else 0
-    avg_daily_total_after = total_kWh_after / days_after if days_after > 0 and not np.isnan(total_kWh_after) else 0
+    # 【修正】日別平均は不要なため、0.0として扱う
+    avg_daily_total_before = 0.0
+    avg_daily_total_after = 0.0
     
     # --- 1. Sheet1: 24時間別平均の書き込み (C36～D59) と合計値 (C33, D33) ---
     if SHEET1_NAME not in workbook.sheetnames:
         workbook.create_sheet(SHEET1_NAME) 
         
     ws_sheet1 = workbook[SHEET1_NAME]
-        
-    # 24時間別平均の計算（「時」カラムは0-23に標準化済み）
+    
+    # 【修正】C33, D33に日別平均合計値 (不要なため 0.0) を書き込む
+    ws_sheet1['C33'] = avg_daily_total_before
+    ws_sheet1['D33'] = avg_daily_total_after
+    
+    # 24時間別平均の計算（ご要望の「時間帯のみの平均」）
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_after.empty else None
 
@@ -173,9 +177,9 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
     ws_summary['H8'] = operating_hours
     ws_summary['B1'] = f"{store_name}の使用電力比較報告書"
     
-    # まとめシートの合計値も書き込み (日別平均合計kWh)
-    ws_summary['B7'] = float(avg_daily_total_before)
-    ws_summary['B8'] = float(avg_daily_total_after)
+    # 【修正】まとめシートの合計値 (日別平均) は不要なため 0.0 を書き込む
+    ws_summary['B7'] = avg_daily_total_before
+    ws_summary['B8'] = avg_daily_total_after
     
     # ファイルを保存
     workbook.save(excel_file_path)
@@ -344,10 +348,4 @@ def main_streamlit_app():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             
-        except Exception as e:
-            st.error("🚨 実行中にエラーが発生しました。ファイル形式と入力値を確認してください。")
-            st.warning("特に、CSVのヘッダー行が「年,月,日,時,...」の形式か、またE列以降に数値データが含まれているか確認してください。")
-            st.exception(e)
-
-if __name__ == "__main__":
-    main_streamlit_app()
+        except Exception as e
