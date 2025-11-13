@@ -113,11 +113,7 @@ def write_excel_reports(excel_file_path, df_before, df_after, start_before, end_
         workbook.create_sheet(SHEET1_NAME) 
         
     ws_sheet1 = workbook[SHEET1_NAME]
-    
-    # C33, D33に日別平均合計値を書き込む
-    ws_sheet1['C33'] = float(avg_daily_total_before)
-    ws_sheet1['D33'] = float(avg_daily_total_after)
-    
+        
     # 24時間別平均の計算（「時」カラムは0-23に標準化済み）
     metrics_before = df_before.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_before.empty else None
     metrics_after = df_after.groupby('時')['合計kWh'].agg(['mean', 'count']) if not df_after.empty else None
