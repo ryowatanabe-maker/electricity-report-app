@@ -269,10 +269,6 @@ def main_streamlit_app():
             df_combined['日'] = pd.to_numeric(df_combined['日'], errors='coerce').astype('Int64')
             df_combined['時'] = pd.to_numeric(df_combined['時'], errors='coerce').astype('Int64')
             
-            # --- データの重複削除 ---
-            df_combined.drop_duplicates(subset=['年', '月', '日', '時'], keep='first', inplace=True)
-            df_combined.dropna(subset=['年', '月', '日', '時'], inplace=True)
-            
             # 💡 時刻の標準化ロジック (0-23に統一) ---
             if not df_combined.empty and df_combined['時'].max() > 23:
                 df_combined['時'] = df_combined['時'] - 1
