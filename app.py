@@ -136,7 +136,7 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
     ws_sum['H8'] = operating_hours
     ws_sum['B1'] = f"{store_name}の使用電力比較報告書"
    
-    except Exception:
+   
         pass
 
     wb.save(excel_path)
