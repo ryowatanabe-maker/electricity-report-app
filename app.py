@@ -89,7 +89,6 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
     - df_before/df_after: '年','月','日','時','合計kWh','日付' を含むDataFrame
     - 0-23 時毎の平均を算出し、Sheet1 に C36-C59 (before), D36-D59 (after) として書き込む
     - まとめシートに期間・営業時間・店舗名を書き込む
-    - 日別平均セル(C33/D33, まとめのB7/B8)は空欄にする
     """
     SHEET1 = "Sheet1"
     SUMMARY = "まとめ"
