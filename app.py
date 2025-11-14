@@ -115,8 +115,6 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
     if SHEET1 not in wb.sheetnames:
         wb.create_sheet(SHEET1)
     ws1 = wb[SHEET1]
-
-    except Exception:
         pass
 
     start_row = 36
