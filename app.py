@@ -177,7 +177,7 @@ def main():
         start_after = st.date_input("開始日 (施工後)", today - datetime.timedelta(days=14), key="start_a")
         end_after = st.date_input("終了日 (施工後)", today - datetime.timedelta(days=7), key="end_a")
 
-    operating_hours = st.text_input("営業時間 (まとめシート H8 に反映)", value="08:00-22:00")
+    operating_hours = st.text_input("営業時間)", value="08:00-22:00")
     store_name = st.text_input("店舗名", value="大倉山店")
 
     st.markdown("---")
