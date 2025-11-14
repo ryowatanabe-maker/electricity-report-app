@@ -116,9 +116,6 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
         wb.create_sheet(SHEET1)
     ws1 = wb[SHEET1]
 
-  
-        pass
-
     start_row = 36
     for hour in range(24):
         row = start_row + hour
@@ -137,8 +134,7 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
     ws_sum['H7'] = f"施工後(調光後)：{fmt(start_after)}～{fmt(end_after)}（{(end_after - start_after).days + 1}日間）"
     ws_sum['H8'] = operating_hours
     ws_sum['B1'] = f"{store_name}の使用電力比較報告書"
-   
-        pass
+
 
     wb.save(excel_path)
     return True
