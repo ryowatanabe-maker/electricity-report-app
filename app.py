@@ -161,8 +161,8 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
 # ---------------------------
 def main():
     st.set_page_config(layout="wide", page_title="電力データ自動処理アプリ")
-    st.title("💡 電力データ自動処理アプリ（施工前/施工後 比較）")
-    st.markdown("CSVをアップロードして、施工前/施工後の0-23時ごとの平均を電力報告テンプレに書き込みます。")
+    st.title("💡 電力データ自動処理アプリ")
+    
 
     uploaded_csvs = st.file_uploader("📈 CSVデータ (複数可) をアップロードしてください", type=['csv'], accept_multiple_files=True)
     col1, col2 = st.columns(2)
