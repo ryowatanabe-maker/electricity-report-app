@@ -8,7 +8,7 @@ import shutil
 import chardet
 import datetime
 import openpyxl
-import matplotlib.pyplot as plt
+
 
 # ---------------------------
 # 設定
