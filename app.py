@@ -1,7 +1,5 @@
-# app.py
 import streamlit as st
 import pandas as pd
-import numpy as np
 import io
 import os
 import shutil
@@ -119,6 +117,7 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
     start_row = 36
     for hour in range(24):
         row = start_row + hour
+        # np.isna の代わりに pd.isna を使用
         val_b = float(ser_before.loc[hour]) if not pd.isna(ser_before.loc[hour]) else 0.0
         val_a = float(ser_after.loc[hour]) if not pd.isna(ser_after.loc[hour]) else 0.0
         ws1.cell(row=row, column=3, value=round(val_b, 4))
@@ -138,36 +137,6 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
 
     wb.save(excel_path)
     return True
-
-# ---------------------------
-# ヘルパー: 集計 → 時間平均・差分テーブル作成
-# ---------------------------
-def build_hourly_comparison(df_before, df_after):
-    """
-    df_before/after: grouped dataframe with columns '年','月','日','時','合計kWh','日付'
-    returns a DataFrame with index 0..23 and columns:
-    before_avg, after_avg, savings (before-after), savings_pct
-    """
-    def hourly_mean(df):
-        if df is None or df.empty:
-            return pd.Series([0.0]*24, index=range(24), dtype=float)
-        s = df.groupby('時')['合計kWh'].mean()
-        s.index = s.index.astype(int)
-        s = s.reindex(range(24), fill_value=0.0)
-        return s
-
-    b = hourly_mean(df_before)
-    a = hourly_mean(df_after)
-
-    df = pd.DataFrame({
-        'hour': range(24),
-        'before_avg_kWh': [float(b.loc[h]) for h in range(24)],
-        'after_avg_kWh': [float(a.loc[h]) for h in range(24)]
-    })
-    df['savings_kWh'] = df['before_avg_kWh'] - df['after_avg_kWh']
-    # %節電（beforeが0のときは None）
-    df['savings_pct'] = df.apply(lambda r: (r['savings_kWh'] / r['before_avg_kWh'] * 100) if r['before_avg_kWh'] != 0 else None, axis=1)
-    return df
 
 # ---------------------------
 # Streamlit アプリ本体
@@ -302,42 +271,11 @@ def main():
         if df_after.empty or found_a < expected_a * 0.95:
             st.warning(f"施工後期間の読み取り件数が少ない可能性: 期待 {expected_a} 件 / 実際 {found_a} 件")
 
-        # --- 集計・比較テーブル作成 ---
-        comp = build_hourly_comparison(df_before, df_after)
-        comp_display = comp.copy()
-        comp_display['savings_pct'] = comp_display['savings_pct'].apply(lambda x: f"{x:.1f}%" if x is not None else "-")
-        comp_display['before_avg_kWh'] = comp_display['before_avg_kWh'].round(4)
-        comp_display['after_avg_kWh'] = comp_display['after_avg_kWh'].round(4)
-        comp_display['savings_kWh'] = comp_display['savings_kWh'].round(4)
-
-        st.subheader("時間帯別平均（0～23時）")
-        st.dataframe(comp_display.rename(columns={
-            'hour': '時刻',
-            'before_avg_kWh': '施工前 平均(kWh)',
-            'after_avg_kWh': '施工後 平均(kWh)',
-            'savings_kWh': '差分(kWh)',
-            'savings_pct': '差分(%)'
-        }), use_container_width=True)
-
-        # 全体の合計節電量（平均値の合算ではなく、時間帯別平均の差分を24時間合算）
-        total_savings_kWh = comp['savings_kWh'].sum()
-        # 全体節電率（中央値的ではなく、合計比率）： (sum(before_avg) - sum(after_avg))/sum(before_avg)
-        sum_before = comp['before_avg_kWh'].sum()
-        sum_after = comp['after_avg_kWh'].sum()
-        total_savings_pct = (sum_before - sum_after) / sum_before * 100 if sum_before != 0 else None
-
-        st.markdown("---")
-        col_a, col_b, col_c = st.columns([1,1,1])
-        col_a.metric("合計：施工前平均 (24h合計)", f"{sum_before:.4f} kWh")
-        col_b.metric("合計：施工後平均 (24h合計)", f"{sum_after:.4f} kWh")
-        col_c.metric("合計節電量 (24h)", f"{total_savings_kWh:.4f} kWh", f"{total_savings_pct:.1f}% " if total_savings_pct is not None else "")
-
-       
-
+        
         # --- Excel書き込み ---
         success = write_excel_reports(temp_excel_path, df_before, df_after,
-                                      start_before, end_before, start_after, end_after,
-                                      operating_hours, store_name)
+                                     start_before, end_before, start_after, end_after,
+                                     operating_hours, store_name)
         if not success:
             st.error("Excelへの書き込みに失敗しました。")
             st.stop()
