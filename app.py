@@ -330,7 +330,7 @@ def main():
         col_a, col_b, col_c = st.columns([1,1,1])
         col_a.metric("合計：施工前平均 (24h合計)", f"{sum_before:.4f} kWh")
         col_b.metric("合計：施工後平均 (24h合計)", f"{sum_after:.4f} kWh")
-        col_c.metric("合計節電量 (24h)", f"{total_savings_kWh:.4f} kWh", f"{(total_savings_pct:.1f}% )" if total_savings_pct is not None else "")
+        col_c.metric("合計節電量 (24h)", f"{total_savings_kWh:.4f} kWh", f"{total_savings_pct:.1f}% " if total_savings_pct is not None else "")
 
         # グラフ
         fig, ax = plt.subplots(figsize=(10, 4))
