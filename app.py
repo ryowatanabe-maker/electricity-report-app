@@ -332,17 +332,7 @@ def main():
         col_b.metric("合計：施工後平均 (24h合計)", f"{sum_after:.4f} kWh")
         col_c.metric("合計節電量 (24h)", f"{total_savings_kWh:.4f} kWh", f"{total_savings_pct:.1f}% " if total_savings_pct is not None else "")
 
-        # グラフ
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(comp['hour'], comp['before_avg_kWh'], marker='o', label='施工前 平均(kWh)')
-        ax.plot(comp['hour'], comp['after_avg_kWh'], marker='o', label='施工後 平均(kWh)')
-        ax.set_xlabel('時刻')
-        ax.set_ylabel('平均 kWh')
-        ax.set_xticks(range(0, 24))
-        ax.set_title('施工前 vs 施工後：時間帯別平均')
-        ax.grid(True)
-        ax.legend()
-        st.pyplot(fig)
+       
 
         # --- Excel書き込み ---
         success = write_excel_reports(temp_excel_path, df_before, df_after,
