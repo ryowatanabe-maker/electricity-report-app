@@ -1,10 +1,16 @@
 import streamlit as st
 import pandas as pd
 import io
+import os
 import chardet
 import datetime
 import openpyxl
 
+
+# ---------------------------
+# 設定
+# ---------------------------
+EXCEL_TEMPLATE_FILENAME = "電力報告テンプレート.xlsx"
 
 # ---------------------------
 # ヘッダー自動検出 + CSV読み込み
@@ -71,12 +77,13 @@ def detect_and_read_csv(uploaded_file) -> pd.DataFrame:
 # ---------------------------
 # Excel書き込み関数
 # ---------------------------
-def write_excel_reports(template_bytes, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
+def write_excel_reports(template_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
     SHEET1 = "Sheet1"
     SUMMARY = "まとめ"
 
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
+        # ローカルのテンプレートファイルを読み込む
+        wb = openpyxl.load_workbook(template_path)
     except Exception as e:
         print(f"Error loading template: {e}")
         return None
@@ -107,6 +114,7 @@ def write_excel_reports(template_bytes, df_before, df_after, start_before, end_b
         row = start_row + hour
         val_b = float(ser_before.loc[hour]) if not pd.isna(ser_before.loc[hour]) else 0.0
         val_a = float(ser_after.loc[hour]) if not pd.isna(ser_after.loc[hour]) else 0.0
+        # テンプレートの構造に合わせてC列(列3)にbefore、D列(列4)にafterを書き込む
         ws1.cell(row=row, column=3, value=round(val_b, 4))
         ws1.cell(row=row, column=4, value=round(val_a, 4))
 
@@ -115,11 +123,13 @@ def write_excel_reports(template_bytes, df_before, df_after, start_before, end_b
     ws_sum = wb[SUMMARY]
 
     fmt = lambda d: f"{d.year}/{d.month}/{d.day}"
+    # テンプレートの構造に合わせて指定セルに書き込む
     ws_sum['H6'] = f"施工前：{fmt(start_before)}～{fmt(end_before)}（{(end_before - start_before).days + 1}日間）"
     ws_sum['H7'] = f"施工後(調光後)：{fmt(start_after)}～{fmt(end_after)}（{(end_after - start_after).days + 1}日間）"
     ws_sum['H8'] = operating_hours
     ws_sum['B1'] = f"{store_name}の使用電力比較報告書"
 
+    # 元のテンプレートを上書きしないよう、メモリ上のバッファに保存して返す
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)
@@ -131,12 +141,8 @@ def write_excel_reports(template_bytes, df_before, df_after, start_before, end_b
 def main():
     st.set_page_config(layout="wide", page_title="電力データ自動処理アプリ")
     st.title("💡 電力データ自動処理アプリ（施工前/施工後 比較）")
-    st.markdown("CSVとExcelテンプレートをアップロードして、データ処理と報告書作成を行います。")
+    st.markdown("CSVをアップロードして、データ処理と報告書作成を行います。")
 
-    template_file = st.file_uploader(
-        "📥 Excelテンプレートファイル (電力報告テンプレート.xlsxなど) をアップロードしてください", 
-        type=['xlsx']
-    )
     uploaded_csvs = st.file_uploader("📈 CSVデータ (複数可) をアップロードしてください", type=['csv'], accept_multiple_files=True)
     
     st.markdown("---")
@@ -158,8 +164,8 @@ def main():
 
     st.markdown("---")
 
-    if not uploaded_csvs or not template_file:
-        st.info("CSVファイルとExcelテンプレートファイルをアップロードすると実行ボタンが有効になります。")
+    if not uploaded_csvs:
+        st.info("CSVファイルをアップロードすると実行ボタンが有効になります。")
         st.stop()
 
     if st.button("🚀 データ処理を実行して報告書を作成"):
@@ -167,7 +173,10 @@ def main():
             st.error("期間指定が不正です。開始日は終了日より前または同じ日にしてください。")
             st.stop()
         
-        template_bytes = template_file.read()
+        # テンプレートファイルの存在チェック
+        if not os.path.exists(EXCEL_TEMPLATE_FILENAME):
+            st.error(f"サーバー上にテンプレートファイル '{EXCEL_TEMPLATE_FILENAME}' が見つかりません。アプリの実行フォルダに置いてください。")
+            st.stop()
 
         # --- CSV読み込み ---
         dfs = []
@@ -228,18 +237,10 @@ def main():
 
         df_before = grouped[(grouped['日付'] >= start_before) & (grouped['日付'] <= end_before)].copy()
         df_after = grouped[(grouped['日付'] >= start_after) & (grouped['日付'] <= end_after)].copy()
-
-        days_b = (end_before - start_before).days + 1
-        expected_b = days_b * 24
-        found_b = df_before.shape[0] if not df_before.empty else 0
-        
-        days_a = (end_after - start_after).days + 1
-        expected_a = days_a * 24
-        found_a = df_after.shape[0] if not df_after.empty else 0
         
         # --- Excel書き込み（メモリ上で完結） ---
         excel_buffer = write_excel_reports(
-            template_bytes, df_before, df_after,
+            EXCEL_TEMPLATE_FILENAME, df_before, df_after,
             start_before, end_before, start_after, end_after,
             operating_hours, store_name
         )
