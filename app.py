@@ -1,18 +1,10 @@
 import streamlit as st
 import pandas as pd
 import io
-import os
-import shutil
 import chardet
 import datetime
 import openpyxl
 
-
-# ---------------------------
-# 設定
-# ---------------------------
-EXCEL_TEMPLATE_FILENAME = "電力報告テンプレート.xlsx"
-TEMP_DIR = "temp_data"
 
 # ---------------------------
 # ヘッダー自動検出 + CSV読み込み
@@ -49,7 +41,6 @@ def detect_and_read_csv(uploaded_file) -> pd.DataFrame:
             header = df_full.iloc[header_row_index].tolist()
             data = df_full.iloc[header_row_index + 1:].copy().reset_index(drop=True)
 
-            # カラム名整形：A-D はそのまま、E以降は kWh_1...
             cleaned_cols = []
             k = 1
             for i, col in enumerate(header):
@@ -59,9 +50,7 @@ def detect_and_read_csv(uploaded_file) -> pd.DataFrame:
                     cleaned_cols.append(f'kWh_{k}')
                     k += 1
 
-            # 読み込んだ行数とヘッダー長がずれる場合の補正
             if data.shape[1] != len(cleaned_cols):
-                # 足りないなら Unnamed を追加、余るなら切る
                 while len(cleaned_cols) < data.shape[1]:
                     cleaned_cols.append(f'Unnamed_{len(cleaned_cols)}')
                 if len(cleaned_cols) > data.shape[1]:
@@ -69,7 +58,6 @@ def detect_and_read_csv(uploaded_file) -> pd.DataFrame:
 
             data.columns = cleaned_cols
 
-            # 必須カラムチェック
             if not all(col in data.columns for col in ['年', '月', '日', '時']):
                 continue
 
@@ -83,33 +71,33 @@ def detect_and_read_csv(uploaded_file) -> pd.DataFrame:
 # ---------------------------
 # Excel書き込み関数
 # ---------------------------
-def write_excel_reports(excel_path, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
-    """
-    - df_before/df_after: '年','月','日','時','合計kWh','日付' を含むDataFrame
-    - 0-23 時毎の平均を算出し、Sheet1 に C36-C59 (before), D36-D59 (after) として書き込む
-    - まとめシートに期間・営業時間・店舗名を書き込む
-    """
+def write_excel_reports(template_bytes, df_before, df_after, start_before, end_before, start_after, end_after, operating_hours, store_name):
     SHEET1 = "Sheet1"
     SUMMARY = "まとめ"
 
     try:
-        wb = openpyxl.load_workbook(excel_path)
-    except FileNotFoundError:
-        st.error("Excelテンプレートが見つかりません。")
-        return False
+        wb = openpyxl.load_workbook(io.BytesIO(template_bytes))
+    except Exception as e:
+        print(f"Error loading template: {e}")
+        return None
 
     def hourly_mean_series(df):
         if df is None or df.empty:
             return pd.Series([0.0]*24, index=range(24), dtype=float)
-        ser = df.groupby('時')['合計kWh'].mean()
-        ser.index = ser.index.astype(int)
-        ser = ser.reindex(range(24), fill_value=0.0)
-        return ser
+        
+        # ファイル(計測箇所)ごとに平均を計算し、合算する
+        mean_series = pd.Series([0.0]*24, index=range(24), dtype=float)
+        for fid in df['file_id'].unique():
+            df_file = df[df['file_id'] == fid]
+            ser = df_file.groupby('時')['合計kWh'].mean()
+            ser.index = ser.index.astype(int)
+            ser = ser.reindex(range(24), fill_value=0.0)
+            mean_series += ser
+        return mean_series
 
     ser_before = hourly_mean_series(df_before)
     ser_after = hourly_mean_series(df_after)
 
-    # Sheet1 書き込み
     if SHEET1 not in wb.sheetnames:
         wb.create_sheet(SHEET1)
     ws1 = wb[SHEET1]
@@ -117,13 +105,11 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
     start_row = 36
     for hour in range(24):
         row = start_row + hour
-        # np.isna の代わりに pd.isna を使用
         val_b = float(ser_before.loc[hour]) if not pd.isna(ser_before.loc[hour]) else 0.0
         val_a = float(ser_after.loc[hour]) if not pd.isna(ser_after.loc[hour]) else 0.0
         ws1.cell(row=row, column=3, value=round(val_b, 4))
         ws1.cell(row=row, column=4, value=round(val_a, 4))
 
-    # まとめシート 書き込み
     if SUMMARY not in wb.sheetnames:
         wb.create_sheet(SUMMARY)
     ws_sum = wb[SUMMARY]
@@ -134,9 +120,10 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
     ws_sum['H8'] = operating_hours
     ws_sum['B1'] = f"{store_name}の使用電力比較報告書"
 
-
-    wb.save(excel_path)
-    return True
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 # ---------------------------
 # Streamlit アプリ本体
@@ -144,18 +131,25 @@ def write_excel_reports(excel_path, df_before, df_after, start_before, end_befor
 def main():
     st.set_page_config(layout="wide", page_title="電力データ自動処理アプリ")
     st.title("💡 電力データ自動処理アプリ（施工前/施工後 比較）")
-    st.markdown("CSVをアップロードして、施工前/施工後の0-23時ごとの平均を計算し、Excelテンプレに出力します。")
+    st.markdown("CSVとExcelテンプレートをアップロードして、データ処理と報告書作成を行います。")
 
+    template_file = st.file_uploader(
+        "📥 Excelテンプレートファイル (電力報告テンプレート.xlsxなど) をアップロードしてください", 
+        type=['xlsx']
+    )
     uploaded_csvs = st.file_uploader("📈 CSVデータ (複数可) をアップロードしてください", type=['csv'], accept_multiple_files=True)
-    col1, col2 = st.columns(2)
+    
+    st.markdown("---")
 
+    col1, col2 = st.columns(2)
     today = datetime.date.today()
+
     with col1:
-        st.subheader("🗓️ 施工前")
+        st.subheader("🗓️ 施工前期間")
         start_before = st.date_input("開始日 (施工前)", today - datetime.timedelta(days=30), key="start_b")
         end_before = st.date_input("終了日 (施工前)", today - datetime.timedelta(days=23), key="end_b")
     with col2:
-        st.subheader("📅 施工後")
+        st.subheader("📅 施工後期間")
         start_after = st.date_input("開始日 (施工後)", today - datetime.timedelta(days=14), key="start_a")
         end_after = st.date_input("終了日 (施工後)", today - datetime.timedelta(days=7), key="end_a")
 
@@ -164,30 +158,23 @@ def main():
 
     st.markdown("---")
 
-    if not uploaded_csvs:
-        st.info("CSVファイルをアップロードすると実行ボタンが有効になります。")
+    if not uploaded_csvs or not template_file:
+        st.info("CSVファイルとExcelテンプレートファイルをアップロードすると実行ボタンが有効になります。")
         st.stop()
 
     if st.button("🚀 データ処理を実行して報告書を作成"):
-        # 期間チェック
         if start_before > end_before or start_after > end_after:
             st.error("期間指定が不正です。開始日は終了日より前または同じ日にしてください。")
             st.stop()
-
-        # テンプレ存在チェック
-        if not os.path.exists(EXCEL_TEMPLATE_FILENAME):
-            st.error(f"テンプレート '{EXCEL_TEMPLATE_FILENAME}' が見つかりません。アプリの実行フォルダに置いてください。")
-            st.stop()
-
-        os.makedirs(TEMP_DIR, exist_ok=True)
-        temp_excel_path = os.path.join(TEMP_DIR, EXCEL_TEMPLATE_FILENAME)
-        shutil.copy(EXCEL_TEMPLATE_FILENAME, temp_excel_path)
+        
+        template_bytes = template_file.read()
 
         # --- CSV読み込み ---
         dfs = []
         try:
-            for f in uploaded_csvs:
+            for i, f in enumerate(uploaded_csvs):
                 df = detect_and_read_csv(f)
+                df['file_id'] = i  # ファイル識別用のIDを追加
                 dfs.append(df)
         except Exception as e:
             st.error("CSV読み込み時にエラーが発生しました。ファイルの形式やエンコーディングを確認してください。")
@@ -200,7 +187,6 @@ def main():
 
         df_all = pd.concat(dfs, ignore_index=True)
 
-        # 必須カラムを数値化（失敗はNaN）
         for col in ['年','月','日','時']:
             if col in df_all.columns:
                 df_all[col] = pd.to_numeric(df_all[col], errors='coerce')
@@ -208,44 +194,30 @@ def main():
                 st.error(f"CSVに必須カラム '{col}' が見つかりません。")
                 st.stop()
 
-        # === 不正行排除ロジック ===
-        # (1) 年/月/日/時 がいずれか欠けている行は除外
         df_all = df_all.dropna(subset=['年','月','日','時'])
-
-        # (2) 時の範囲（0~24）のみ残す（まず広く許容）
         df_all = df_all[df_all['時'].between(0, 24)]
 
-        # (3) もし1-24表記だったら 0-23 に変換
         if df_all['時'].max() > 23:
-            # 整数化して -1
             df_all['時'] = df_all['時'].astype(int) - 1
             st.info("CSVの時刻が1-24形式だったため、0-23形式に変換しました。")
 
-        # (4) 最終チェック：0-23 のみ残す
         df_all = df_all[df_all['時'].between(0, 23)]
-
-        # (5) 年/月/日/時 を整数化（例: 2024.0 -> 2024）
         df_all[['年','月','日','時']] = df_all[['年','月','日','時']].astype(int)
 
-        # 消費カラム
         consumption_cols = [c for c in df_all.columns if c.startswith('kWh_')]
         if not consumption_cols:
             st.error("E列以降に消費電力の数値カラムが見つかりません（kWh_で始まるカラム）。CSV形式を確認してください。")
             st.stop()
 
-        # 数値変換（NaNは0.0に）
         for c in consumption_cols:
             df_all[c] = pd.to_numeric(df_all[c], errors='coerce').fillna(0.0)
 
-        # --- E列以降を合算して '合計kWh' を作る（行ごと）
         df_all['合計kWh'] = df_all[consumption_cols].sum(axis=1)
 
-        # --- 同一 (年,月,日,時) を合算（複数行がある場合にまとめる）
-        grouped = df_all.groupby(['年','月','日','時'], as_index=False)[consumption_cols + ['合計kWh']].sum()
-        # 合算後の合計kWh は再計算（安全のため）
+        # file_id も含めてgroupbyする（同一ファイル内の同一日時をまとめる）
+        grouped = df_all.groupby(['file_id', '年','月','日','時'], as_index=False)[consumption_cols + ['合計kWh']].sum()
         grouped['合計kWh'] = grouped[consumption_cols].sum(axis=1) if consumption_cols else grouped['合計kWh']
 
-        # 日付列を作る
         grouped['日付'] = pd.to_datetime(
             grouped['年'].astype(int).astype(str) + "-" +
             grouped['月'].astype(int).astype(str) + "-" +
@@ -254,49 +226,38 @@ def main():
         ).dt.date
         grouped = grouped.dropna(subset=['日付'])
 
-        # 期間で分割
         df_before = grouped[(grouped['日付'] >= start_before) & (grouped['日付'] <= end_before)].copy()
         df_after = grouped[(grouped['日付'] >= start_after) & (grouped['日付'] <= end_after)].copy()
 
-        # 欠損チェック
         days_b = (end_before - start_before).days + 1
         expected_b = days_b * 24
-        found_b = df_before.shape[0]
-        if df_before.empty or found_b < expected_b * 0.95:
-            st.warning(f"施工前期間の読み取り件数が少ない可能性: 期待 {expected_b} 件 / 実際 {found_b} 件")
-
+        found_b = df_before.shape[0] if not df_before.empty else 0
+        
         days_a = (end_after - start_after).days + 1
         expected_a = days_a * 24
-        found_a = df_after.shape[0]
-        if df_after.empty or found_a < expected_a * 0.95:
-            st.warning(f"施工後期間の読み取り件数が少ない可能性: 期待 {expected_a} 件 / 実際 {found_a} 件")
-
+        found_a = df_after.shape[0] if not df_after.empty else 0
         
-        # --- Excel書き込み ---
-        success = write_excel_reports(temp_excel_path, df_before, df_after,
-                                     start_before, end_before, start_after, end_after,
-                                     operating_hours, store_name)
-        if not success:
-            st.error("Excelへの書き込みに失敗しました。")
+        # --- Excel書き込み（メモリ上で完結） ---
+        excel_buffer = write_excel_reports(
+            template_bytes, df_before, df_after,
+            start_before, end_before, start_after, end_after,
+            operating_hours, store_name
+        )
+        
+        if excel_buffer is None:
+            st.error("Excelテンプレートの読み込みまたはデータ書き込みに失敗しました。")
             st.stop()
 
-        # 保存ファイル名リネームとダウンロード提供
         today_str = datetime.date.today().strftime('%Y%m%d')
         out_name = f"{store_name}_電力報告書_{today_str}.xlsx"
-        final_path = os.path.join(TEMP_DIR, out_name)
-        try:
-            os.replace(temp_excel_path, final_path)
-        except Exception:
-            shutil.copy(temp_excel_path, final_path)
-
-        with open(final_path, "rb") as f:
-            st.success("✅ 処理完了しました。以下からダウンロードしてください。")
-            st.download_button(
-                label="⬇️ 報告書をダウンロード",
-                data=f,
-                file_name=out_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        
+        st.success("✅ 処理完了しました。以下からダウンロードしてください。")
+        st.download_button(
+            label="⬇️ 報告書をダウンロード",
+            data=excel_buffer,
+            file_name=out_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 if __name__ == "__main__":
     main()
